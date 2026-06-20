@@ -60,6 +60,78 @@
     .btn-back   { background: rgba(255,255,255,0.1); color:#aaa; font-size:.85em; margin-top:4px; }
     .or { text-align:center; color:#555; margin:6px 0; font-size:.8em; }
 
+
+    /* ── INTRO VIDEO ─────────────────────────────── */
+    #introScreen {
+      position:fixed; inset:0; z-index:9999;
+      background:#000;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      overflow:hidden;
+    }
+    #introVideo {
+      width:100%; height:100%;
+      object-fit:cover;
+      display:block;
+    }
+    /* Title overlay that fades in mid-video */
+    #introTitle {
+      position:absolute;
+      top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      text-align:center;
+      pointer-events:none;
+      opacity:0;
+      transition:opacity 1s ease;
+    }
+    #introTitle.visible { opacity:1; }
+    #introTitle .it-logo {
+      font-size:clamp(2.2rem,8vw,4rem);
+      font-weight:900;
+      background:linear-gradient(90deg,#00e5ff,#69f0ae,#ffeb3b,#ff4081);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      text-shadow:none;
+      line-height:1.1;
+      margin-bottom:8px;
+    }
+    #introTitle .it-sub {
+      font-size:clamp(.9rem,3vw,1.3rem);
+      color:rgba(255,255,255,.75);
+      letter-spacing:.12em;
+      text-transform:uppercase;
+    }
+    /* Skip button */
+    #skipBtn {
+      position:absolute; bottom:28px; right:24px;
+      background:rgba(255,255,255,.15);
+      border:1.5px solid rgba(255,255,255,.3);
+      color:#fff; font-size:.88em; font-weight:600;
+      padding:8px 20px; border-radius:20px;
+      cursor:pointer; letter-spacing:.05em;
+      backdrop-filter:blur(6px);
+      transition:background .2s;
+      z-index:2;
+    }
+    #skipBtn:hover { background:rgba(255,255,255,.28); }
+    /* Tap-anywhere hint on mobile */
+    #introTapHint {
+      position:absolute; bottom:28px; left:50%;
+      transform:translateX(-50%);
+      font-size:.78em; color:rgba(255,255,255,.4);
+      pointer-events:none;
+      animation:hintPulse 2s ease-in-out infinite;
+    }
+    @keyframes hintPulse {
+      0%,100%{opacity:.4} 50%{opacity:.9}
+    }
+    /* Fade-out animation */
+    #introScreen.fading {
+      animation:introFade .7s ease-in forwards;
+    }
+    @keyframes introFade {
+      from{opacity:1} to{opacity:0; pointer-events:none}
+    }
+
     /* ── ROOM LOBBY ──────────────────────────── */
     #roomLobby { display:none; }
     #roomLobby .inner {
@@ -308,6 +380,27 @@
   </style>
 </head>
 <body>
+
+
+<!-- ════════ INTRO VIDEO SCREEN ════════ -->
+<div id="introScreen">
+  <video id="introVideo" src="intro.mp4"
+         autoplay muted playsinline
+         preload="auto">
+  </video>
+
+  <!-- Title overlay (fades in after 1.5 s) -->
+  <div id="introTitle">
+    <div class="it-logo">🦎 MECCHA<br>CHAMELEON</div>
+    <div class="it-sub">Paint · Hide · Survive</div>
+  </div>
+
+  <!-- Skip button -->
+  <button id="skipBtn" onclick="dismissIntro()">Skip ▶</button>
+
+  <!-- Tap anywhere hint (mobile) -->
+  <div id="introTapHint">Tap anywhere to skip</div>
+</div>
 
 <!-- ════════ LOBBY ════════ -->
 <div id="lobby">

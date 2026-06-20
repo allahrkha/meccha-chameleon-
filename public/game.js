@@ -24,8 +24,10 @@ const playerData   = {}; // id → { role, name, customization }
 
 // ── Camera ─────────────────────────────────────────────────────
 let camTheta = 0, camPhi = 0.45;
-const CAM_D  = 7;
-const WALL_LIM = 9.3;
+let camDist    = 7;          // zoom-able via pinch
+const CAM_D_MIN = 3;
+const CAM_D_MAX = 14;
+const WALL_LIM  = 9.3;
 
 // ── Input ──────────────────────────────────────────────────────
 const keys     = {};
@@ -41,6 +43,33 @@ const hiderCamoScores = {};
 
 // ── Detect Ring ────────────────────────────────────────────────
 let detectRing = null, ringPulseTick = 0;
+
+// ── Rounds ────────────────────────────────────────────────────
+let currentRound = 0, maxRounds = 1, seekerWins = 0, hiderWins = 0;
+
+// ── Reconnect token ────────────────────────────────────────────
+function getToken(){
+  let t=localStorage.getItem('chameleon_token');
+  if(!t){ t=Math.random().toString(36).slice(2)+Date.now().toString(36); localStorage.setItem('chameleon_token',t); }
+  return t;
+}
+
+// ── Fullscreen / Orientation ────────────────────────────────────
+function enterFullscreen(){
+  const el=document.documentElement;
+  const fn=el.requestFullscreen||el.webkitRequestFullscreen||el.mozRequestFullScreen;
+  if(fn) fn.call(el).catch(()=>{});
+  try{ screen.orientation?.lock('landscape').catch(()=>{}); }catch(e){}
+}
+function toggleFullscreen(){
+  const active=document.fullscreenElement||document.webkitFullscreenElement;
+  if(active){(document.exitFullscreen||document.webkitExitFullscreen).call(document);}
+  else{ enterFullscreen(); }
+  const btn=document.getElementById('fsBtn');
+  if(btn) setTimeout(()=>{
+    btn.textContent=(document.fullscreenElement||document.webkitFullscreenElement)?'⛶':'⛶';
+  },200);
+}
 
 // ── Minimap ────────────────────────────────────────────────────
 let minimapCanvas = null, minimapCtx = null;
@@ -237,7 +266,7 @@ function updateLobbyPreview(){
 function createRoom(){
   initAudio();
   const name=document.getElementById('playerName').value.trim()||'Player';
-  socket.emit('createRoom',{name,customization:myCustomization},(res)=>{
+  socket.emit('createRoom',{name,customization:myCustomization,token:getToken()},(res)=>{
     if(!res.ok) return toast('❌ '+res.err);
     myId=socket.id;myRole=res.me.role;roomCode=res.code;isHost=true;
     playerData[myId]={role:'hider',name,customization:myCustomization};
@@ -249,7 +278,7 @@ function joinRoom(){
   const name=document.getElementById('playerName').value.trim()||'Player';
   const code=document.getElementById('joinCode').value.trim().toUpperCase();
   if(code.length<4) return toast('Enter a valid room code');
-  socket.emit('joinRoom',{code,name,customization:myCustomization},(res)=>{
+  socket.emit('joinRoom',{code,name,customization:myCustomization,token:getToken()},(res)=>{
     if(!res.ok) return toast('❌ '+res.err);
     myId=socket.id;myRole=res.me.role;roomCode=res.code;isHost=false;
     playerData[myId]={role:'hider',name,customization:myCustomization};
@@ -280,9 +309,14 @@ function refreshPlayerList(players){
   });
 }
 function startGame(){
-  const mode=document.getElementById('modeSelect').value;
-  const map=document.getElementById('mapSelect')?.value||'hotel';
-  socket.emit('startGame',{mode,map},(res)=>{if(res&&!res.ok)toast('❌ '+res.err);});
+  const mode   =document.getElementById('modeSelect').value;
+  const map    =document.getElementById('mapSelect')?.value||'hotel';
+  const rounds =document.getElementById('roundsSelect')?.value||'1';
+  socket.emit('startGame',{mode,map,rounds},(res)=>{if(res&&!res.ok)toast('❌ '+res.err);});
+}
+function nextRound(){
+  socket.emit('nextRound');
+  document.getElementById('resultOverlay').style.display='none';
 }
 function goBackLobby(){socket.emit('resetLobby');document.getElementById('resultOverlay').style.display='none';}
 
@@ -537,6 +571,10 @@ function buildSugarland(){
   const sun=new THREE.DirectionalLight(0xfffde7,1.2);sun.position.set(10,15,5);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);scene.add(sun);
   addFloorPlane(W,D,makeSugarFloorTex());
   buildCandyFence(W,D);
+  // Fence boundary colliders (slightly inside visual fence)
+  const fw=9.6;
+  bc(0,-fw,fw,0.3); bc(0,fw,fw,0.3);
+  bc(-fw,0,0.3,fw); bc(fw,0,0.3,fw);
   cottonCandy(-5.5,-5.5,0xf48fb1);cottonCandy(6,4,0xce93d8);cottonCandy(-7,3,0x80deea);cottonCandy(4,7.5,0xfff176);cottonCandy(0.5,-1,0xf8bbd0);cottonCandy(-3,6,0xb39ddb);
   lollipop(-3,-4,0xff4081);lollipop(5.5,2,0xff9800);lollipop(-6.5,5,0x7c4dff);lollipop(3,-7,0x00e5ff);lollipop(-1,7,0x69f0ae);lollipop(7.5,-3,0xe91e63);
   cakeTable(-3.5,2.5);cakeTable(4,-2);cakeTable(-1.5,-5.5);cakeTable(6,-6);
@@ -833,6 +871,8 @@ function spawnPlayer(pdata){
   const mesh=createChar(hex,pdata.name,pdata.customization);
   mesh.position.set(pdata.position.x,0,pdata.position.z);mesh.rotation.y=pdata.rotY||0;
   scene.add(mesh);playerMeshes[pdata.id]=mesh;
+  // Give seekers their glow immediately on spawn
+  if(pdata.role==='seeker') setSeekerGlow(pdata.id,true);
 }
 function setCharColor(id,colorStr){
   const mesh=playerMeshes[id];if(!mesh)return;
@@ -852,6 +892,37 @@ function applyPose(id,pose){
   m.scale.set(1,1,1);m.position.y=0;
   if(pose==='crouch'){m.scale.y=0.58;m.position.y=-0.35;}
   else if(pose==='wall-flat'){m.scale.z=0.12;}
+}
+// ─ Seeker glow / un-ghost ───────────────────────────────────────────────
+function setSeekerGlow(id, on){
+  const mesh=playerMeshes[id]; if(!mesh) return;
+  // Remove old glow
+  ['seekerGlow','seekerCorona'].forEach(n=>{ const o=mesh.getObjectByName(n); if(o) mesh.remove(o); });
+  if(!on) return;
+  const light=new THREE.PointLight(0xFF4500,1.0,5);
+  light.name='seekerGlow'; light.position.set(0,1.2,0); mesh.add(light);
+  const corona=makeMesh(
+    new THREE.SphereGeometry(0.8,8,8),
+    new THREE.MeshBasicMaterial({color:0xFF4500,transparent:true,opacity:0.07,side:THREE.BackSide,depthWrite:false})
+  );
+  corona.name='seekerCorona'; corona.position.y=0.8; mesh.add(corona);
+}
+function unGhost(id){
+  const mesh=playerMeshes[id]; if(!mesh) return;
+  mesh.traverse(m=>{
+    if(m.isMesh&&m.material&&m.material.transparent){
+      m.material=m.material.clone();
+      m.material.transparent=false; m.material.opacity=1; m.material.depthWrite=true;
+    }
+  });
+  mesh.userData.isGhost=false;
+}
+function pulseSeekerGlows(){
+  const t=clock.getElapsedTime();
+  Object.values(playerMeshes).forEach(mesh=>{
+    const gl=mesh.getObjectByName('seekerGlow');
+    if(gl) gl.intensity=0.7+Math.sin(t*3)*0.35;
+  });
 }
 function makeGhost(id){
   const mesh=playerMeshes[id];if(!mesh)return;
@@ -1108,7 +1179,7 @@ function updateMovement(dt){
 function updateCamera(){
   if(!myMesh) return;
   const px=myMesh.position.x,pz=myMesh.position.z;
-  camera.position.set(px+CAM_D*Math.sin(camTheta)*Math.cos(camPhi),CAM_D*Math.sin(camPhi)+1.2,pz+CAM_D*Math.cos(camTheta)*Math.cos(camPhi));
+  camera.position.set(px+camDist*Math.sin(camTheta)*Math.cos(camPhi),camDist*Math.sin(camPhi)+1.2,pz+camDist*Math.cos(camTheta)*Math.cos(camPhi));
   camera.lookAt(px,1.0,pz);
 }
 
@@ -1119,6 +1190,7 @@ function loop(){
   updateMovement(dt);updateCamera();animateChars(dt);updateDetectRing(dt);updateEmoteParticles();
   camoTick+=dt;if(camoTick>1.5){camoTick=0;computeCamoScore();}
   updateMinimap();
+  pulseSeekerGlows();
   renderer.render(scene,camera);
 }
 
@@ -1168,10 +1240,27 @@ function initCameraControls(){
   cv.addEventListener('touchstart',e=>{const t=e.touches[0];if(t.clientX>innerWidth*0.4){dragActive=true;dragLast={x:t.clientX,y:t.clientY};}},{passive:true});
   cv.addEventListener('touchmove',e=>{if(!dragActive)return;const t=e.touches[0];camTheta-=(t.clientX-dragLast.x)*0.004;camPhi=Math.max(0.1,Math.min(1.25,camPhi-(t.clientY-dragLast.y)*0.004));dragLast={x:t.clientX,y:t.clientY};},{passive:true});
   cv.addEventListener('touchend',()=>{dragActive=false;},{passive:true});
+  // ── Pinch to zoom ───────────────────────────────────────────
+  let pinchDist0=0;
+  function touchDist(t){const dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);}
+  cv.addEventListener('touchstart',e=>{ if(e.touches.length===2){dragActive=false;pinchDist0=touchDist(e.touches);} },{passive:true});
+  cv.addEventListener('touchmove',e=>{
+    if(e.touches.length===2){
+      const d=touchDist(e.touches);
+      camDist=Math.max(CAM_D_MIN,Math.min(CAM_D_MAX,camDist+(pinchDist0-d)*0.03));
+      pinchDist0=d;
+    }
+  },{passive:true});
+
+  // ── Mouse drag (desktop) ────────────────────────────────────
   let mDown=false,mLast={x:0,y:0};
   cv.addEventListener('mousedown',e=>{if(paintOpen)return;mDown=true;mLast={x:e.clientX,y:e.clientY};});
   document.addEventListener('mousemove',e=>{if(!mDown)return;camTheta-=(e.clientX-mLast.x)*0.004;camPhi=Math.max(0.1,Math.min(1.25,camPhi-(e.clientY-mLast.y)*0.004));mLast={x:e.clientX,y:e.clientY};});
   document.addEventListener('mouseup',()=>{mDown=false;});
+  // Mouse wheel zoom (desktop)
+  cv.addEventListener('wheel',e=>{
+    camDist=Math.max(CAM_D_MIN,Math.min(CAM_D_MAX,camDist+e.deltaY*0.01));
+  },{passive:true});
 }
 
 // ═══════════════════════════════════════════════════
@@ -1271,8 +1360,19 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 //  STATS LEADERBOARD
 // ═══════════════════════════════════════════════════
 
-function renderStats(winner,stats){
+function renderStats(winner,stats,round={}){
   if(!stats) return;
+  // Round score banner
+  const {round:r,maxRounds:mr,sw=0,hw=0,isMatchOver}=round;
+  const roundBanner=mr>1
+    ?`<div style="text-align:center;margin-bottom:10px">
+        <span style="font-size:.82em;color:#aaa">Round ${r||1} of ${mr} &nbsp;|&nbsp;</span>
+        <span style="color:#FF6030">Seekers ${sw}</span>
+        <span style="color:#aaa"> — </span>
+        <span style="color:#69f0ae">Hiders ${hw}</span>
+      </div>`
+    :'';
+  stats._roundBanner=roundBanner;
   const seekerNames=stats.seekers.map(s=>s.name).join(', ');
   const rows=stats.hiders.map(h=>{
     const status=h.survived?`<span style="color:#69f0ae">🦎 Survived!</span>`:`<span style="color:#ff5252">💥 Tagged${h.taggedAt!=null?' at '+h.taggedAt+'s':''}`;
@@ -1280,6 +1380,7 @@ function renderStats(winner,stats){
     return `<tr style="border-bottom:1px solid rgba(255,255,255,0.07)"><td style="padding:7px 8px">${esc(h.name)}</td><td style="padding:7px 8px">${status}</td><td style="padding:7px 8px">${bar}</td></tr>`;
   }).join('');
   document.getElementById('resMsg').innerHTML=`
+    ${stats._roundBanner||''}
     <div style="font-size:.82em;color:#aaa;margin-bottom:8px">👁️ Seekers: <strong style="color:#FF6030">${esc(seekerNames)}</strong></div>
     <table style="width:100%;border-collapse:collapse;font-size:.88em;text-align:left">
       <thead><tr style="color:#888;font-size:.75em;border-bottom:1px solid rgba(255,255,255,0.15)"><th style="padding:4px 8px">Player</th><th style="padding:4px 8px">Result</th><th style="padding:4px 8px">Camo</th></tr></thead>
@@ -1374,24 +1475,94 @@ socket.on('huntStarted',({huntTime})=>{
 });
 socket.on('playerTagged',({id,name,taggedBy})=>{
   setCharColor(id,'#cc3333');markTagged(id);
-  if(id===myId){SFX.tagged();makeGhost(myId);myRole='ghost';refreshRoleUI();toast('💥 Tagged! You are a ghost now — spectate freely 👻',4000);}
-  else{SFX.ping();toast(`${name} found by ${taggedBy}! 👆`);makeGhost(id);}
+  if(id===myId){
+    SFX.tagged();makeGhost(myId);myRole='ghost';refreshRoleUI();
+    toast('💥 Tagged! You are a ghost now — spectate freely 👻',4000);
+  }else{SFX.ping();toast(`${name} found by ${taggedBy}! 👆`);makeGhost(id);}
   if(playerData[id]) playerData[id].role='ghost';
 });
-socket.on('roleChanged',({id,role,color})=>{setCharColor(id,color);if(playerData[id])playerData[id].role=role;if(id===myId){myRole=role;refreshRoleUI();SFX.roleChange();toast('🦠 You are now a SEEKER!',3500);}});
-socket.on('gameOver',({winner,reason,stats})=>{
-  clearInterval(timerIval);
-  const iWon=(winner==='hiders'&&myRole==='hider')||(winner==='seekers'&&myRole==='seeker');
-  iWon?SFX.win():SFX.lose();
-  document.getElementById('resEmoji').textContent=winner==='seekers'?'👁️':'🦎';
-  document.getElementById('resTitle').textContent=winner==='seekers'?'Seekers Win!':'Hiders Win!';
-  renderStats(winner,stats);document.getElementById('resultOverlay').style.display='flex';
+
+// Infection mode: tagged hider becomes seeker — un-ghost + add glow
+socket.on('roleChanged',({id,role,color})=>{
+  if(playerData[id]) playerData[id].role=role;
+  if(role==='seeker'){
+    unGhost(id);           // remove ghost transparency
+    setCharColor(id,color);
+    setSeekerGlow(id,true);
+  } else {
+    setCharColor(id,color);
+    setSeekerGlow(id,false);
+  }
+  if(id===myId){myRole=role;refreshRoleUI();SFX.roleChange();toast('🦠 You are now a SEEKER! Hunt them!',3500);}
 });
+
+socket.on('gameOver',({winner,reason,stats,round,maxRounds:mr,seekerWins:sw,hiderWins:hw,isMatchOver,matchWinner})=>{
+  clearInterval(timerIval);
+  currentRound=round||1; maxRounds=mr||1; seekerWins=sw||0; hiderWins=hw||0;
+  const iWon=(winner==='hiders'&&(myRole==='hider'||myRole==='ghost'))||(winner==='seekers'&&myRole==='seeker');
+  iWon?SFX.win():SFX.lose();
+
+  if(isMatchOver){
+    document.getElementById('resEmoji').textContent=matchWinner==='seekers'?'👁️':matchWinner==='hiders'?'🦎':'🤝';
+    document.getElementById('resTitle').textContent=
+      matchWinner==='seekers'?'Seekers Win the Match!':
+      matchWinner==='hiders' ?'Hiders Win the Match!':'It\'s a Draw!';
+  } else {
+    document.getElementById('resEmoji').textContent=winner==='seekers'?'👁️':'🦎';
+    document.getElementById('resTitle').textContent=winner==='seekers'?'Seekers Win!':'Hiders Win!';
+  }
+  renderStats(winner,stats,{round,maxRounds:mr,sw,hw,isMatchOver,matchWinner});
+  document.getElementById('resultOverlay').style.display='flex';
+  // Show/hide Next Round button
+  const nrBtn=document.getElementById('nextRoundBtn');
+  const nrMsg=document.getElementById('nextRoundMsg');
+  if(nrBtn&&nrMsg){
+    if(!isMatchOver){
+      nrBtn.style.display=isHost?'block':'none';
+      nrMsg.style.display=isHost?'none':'block';
+      nrMsg.textContent='Waiting for host to start next round…';
+    } else {
+      nrBtn.style.display='none'; nrMsg.style.display='none';
+    }
+  }
+});
+
+socket.on('playerDisconnected',({id,name})=>{
+  toast(`${name} disconnected — waiting 20s for reconnect… ⚡`);
+  if(playerMeshes[id]){
+    // Dim disconnected player
+    playerMeshes[id].traverse(m=>{ if(m.isMesh&&m.material){m.material=m.material.clone();m.material.opacity=0.35;m.material.transparent=true;} });
+  }
+});
+
+socket.on('playerRejoined',({id,oldId,name})=>{
+  toast(`${name} reconnected! 🔌`);
+  // Remap mesh from old ID to new ID
+  if(playerMeshes[oldId]&&oldId!==id){
+    playerMeshes[id]=playerMeshes[oldId];
+    delete playerMeshes[oldId];
+    // Restore opacity
+    playerMeshes[id].traverse(m=>{ if(m.isMesh&&m.material){m.material=m.material.clone();m.material.opacity=1;m.material.transparent=false;} });
+  }
+  if(playerData[oldId]){playerData[id]=playerData[oldId];delete playerData[oldId];}
+});
+
+socket.on('reconnected',({me,room})=>{
+  myId=socket.id;myRole=me.role;roomCode=room.code;
+  toast('Reconnected! 🔌',3000);
+  // Re-enter the game world
+  if(room.state!=='lobby'){ enterGame(room); }
+});
+
 socket.on('returnedToLobby',room=>{
   gameState='lobby';myRole='hider';
+  currentRound=0;seekerWins=0;hiderWins=0;
   document.getElementById('resultOverlay').style.display='none';
   Object.values(room.players).forEach(p=>{
-    if(playerMeshes[p.id])playerMeshes[p.id].userData.isGhost=false;
+    if(playerMeshes[p.id]){
+      playerMeshes[p.id].userData.isGhost=false;
+      setSeekerGlow(p.id,false);
+    }
     playerData[p.id]={role:'hider',name:p.name,customization:p.customization||{}};
     setCharColor(p.id,p.bodyColor);applyPose(p.id,'stand');
   });
@@ -1399,5 +1570,66 @@ socket.on('returnedToLobby',room=>{
 });
 
 // ── Init customization UI on page load ─────────────────────────
-document.addEventListener('DOMContentLoaded',()=>initCustomizationUI());
-if(document.readyState==='complete'||document.readyState==='interactive') initCustomizationUI();
+document.addEventListener('DOMContentLoaded',()=>{ initCustomizationUI(); initIntro(); });
+if(document.readyState==='complete'||document.readyState==='interactive'){ initCustomizationUI(); initIntro(); }
+
+// ═══════════════════════════════════════════════════
+//  🎬  INTRO VIDEO SCENE
+// ═══════════════════════════════════════════════════
+
+let introDone = false;
+
+function initIntro(){
+  const screen = document.getElementById('introScreen');
+  const video  = document.getElementById('introVideo');
+  const title  = document.getElementById('introTitle');
+  if (!screen || !video) return;
+
+  // Show title overlay after 1.5 s (mid-video)
+  setTimeout(() => title?.classList.add('visible'), 1500);
+
+  // Auto-dismiss when video finishes
+  video.addEventListener('ended', dismissIntro);
+
+  // Tap ANYWHERE on the intro screen to skip (mobile-friendly)
+  screen.addEventListener('touchstart', (e) => {
+    // Small delay so accidental touches don't fire immediately
+    e.preventDefault();
+    dismissIntro();
+  }, { passive: false });
+
+  // Click anywhere on desktop also skips
+  screen.addEventListener('click', dismissIntro);
+
+  // Keyboard: any key skips
+  document.addEventListener('keydown', function onKey(){
+    dismissIntro();
+    document.removeEventListener('keydown', onKey);
+  });
+
+  // Safety: auto-dismiss after 15 s even if video stalls
+  setTimeout(dismissIntro, 15000);
+
+  // Try to play (browsers may block autoplay without user gesture;
+  // if blocked we auto-show lobby immediately)
+  const playPromise = video.play();
+  if (playPromise !== undefined) {
+    playPromise.catch(() => {
+      // Autoplay blocked — show lobby straight away
+      screen.style.display = 'none';
+      introDone = true;
+    });
+  }
+}
+
+function dismissIntro(){
+  if (introDone) return;
+  introDone = true;
+  const screen = document.getElementById('introScreen');
+  const video  = document.getElementById('introVideo');
+  if (!screen) return;
+  // Fade out then hide
+  screen.classList.add('fading');
+  if (video) video.pause();
+  setTimeout(() => { screen.style.display = 'none'; }, 680);
+}
