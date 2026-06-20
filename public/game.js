@@ -61,15 +61,49 @@ function enterFullscreen(){
   if(fn) fn.call(el).catch(()=>{});
   try{ screen.orientation?.lock('landscape').catch(()=>{}); }catch(e){}
 }
-function toggleFullscreen(){
-  const active=document.fullscreenElement||document.webkitFullscreenElement;
-  if(active){(document.exitFullscreen||document.webkitExitFullscreen).call(document);}
-  else{ enterFullscreen(); }
+// ── Device detection ─────────────────────────────────────────────
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+               (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+const IS_MOBILE = IS_IOS || /Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+function updateFsBtn(){
   const btn=document.getElementById('fsBtn');
-  if(btn) setTimeout(()=>{
-    btn.textContent=(document.fullscreenElement||document.webkitFullscreenElement)?'⛶':'⛶';
-  },200);
+  if(!btn) return;
+  const active=!!(document.fullscreenElement||document.webkitFullscreenElement);
+  btn.textContent = active ? '⊡' : '⛶';
+  btn.title = active ? 'Exit fullscreen' : 'Fullscreen';
 }
+
+function toggleFullscreen(){
+  if(IS_IOS){
+    document.getElementById('iosHint').style.display='flex';
+    return;
+  }
+  const active=document.fullscreenElement||document.webkitFullscreenElement;
+  if(active){
+    (document.exitFullscreen||document.webkitExitFullscreen).call(document).then(updateFsBtn);
+  } else {
+    enterFullscreen();
+    setTimeout(updateFsBtn, 400);
+  }
+}
+
+function enterFullscreen(){
+  if(IS_IOS) return;
+  const el=document.documentElement;
+  const fn=el.requestFullscreen||el.webkitRequestFullscreen||el.mozRequestFullScreen;
+  if(fn) fn.call(el).catch(()=>{});
+  try{ screen.orientation?.lock('landscape').catch(()=>{}); }catch(e){}
+}
+
+// Keep screen on during gameplay (Android Chrome / desktop Chrome)
+async function requestWakeLock(){
+  try{ if('wakeLock' in navigator) await navigator.wakeLock.request('screen'); }catch(e){}
+}
+
+// Listen for external fullscreen changes (e.g. user presses Esc)
+document.addEventListener('fullscreenchange', updateFsBtn);
+document.addEventListener('webkitfullscreenchange', updateFsBtn);
 
 // ── Minimap ────────────────────────────────────────────────────
 let minimapCanvas = null, minimapCtx = null;
@@ -123,6 +157,119 @@ const PALETTE = [
   '#ff7043','#ffd54f','#4caf50','#795548','#607d8b',
   '#00e5ff','#ff4081','#7c4dff','#ff5722','#212121',
 ];
+
+// ═══════════════════════════════════════════════════════════════
+//  🎨  CAMOUFLAGE SHADER MATERIAL
+// ═══════════════════════════════════════════════════════════════
+// Uses MeshStandardMaterial with onBeforeCompile injection so
+// full PBR lighting is preserved.  The shader adds:
+//   • Fresnel edge blending → edges dissolve into env color
+//   • Value-noise micro-pattern → simulates texture matching
+//   • Env tint pass → subtle global colour pull toward surroundings
+//   • Opacity modulation → up to 22% transparent at 100% camo
+
+const _scanRay = new THREE.Raycaster();
+
+function createCamoMaterial(hexColor){
+  const c = typeof hexColor==='number' ? hexColor : parseInt(String(hexColor).replace('#',''),16);
+  const mat = new THREE.MeshStandardMaterial({
+    color:       new THREE.Color(c),
+    roughness:   0.65,
+    transparent: true,
+    opacity:     1.0,
+  });
+
+  // Uniforms shared with the injected shader (updated by reference each frame)
+  mat.userData.camoUniforms = {
+    envColor:  { value: new THREE.Color(1,1,1) },
+    camoScore: { value: 0.0 },
+    utime:     { value: 0.0 },
+  };
+
+  mat.onBeforeCompile = shader => {
+    shader.uniforms.uEnvColor  = mat.userData.camoUniforms.envColor;
+    shader.uniforms.uCamoScore = mat.userData.camoUniforms.camoScore;
+    shader.uniforms.uTime      = mat.userData.camoUniforms.utime;
+
+    // ── vertex: pass world position ─────────────────────────
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>',
+        `#include <common>
+         varying vec3 vWorldPos;`)
+      .replace('#include <worldpos_vertex>',
+        `#include <worldpos_vertex>
+         vWorldPos = worldPosition.xyz;`);
+
+    // ── fragment: inject before color_fragment ──────────────
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>',
+        `#include <common>
+         uniform vec3  uEnvColor;
+         uniform float uCamoScore;
+         uniform float uTime;
+         varying vec3  vWorldPos;
+
+         /* 3-D value noise (smooth, cheap) */
+         float h31(vec3 p){ return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453); }
+         float vn3(vec3 p){
+           vec3 i=floor(p), f=fract(p);
+           f=f*f*(3.0-2.0*f);
+           return mix(
+             mix(mix(h31(i),           h31(i+vec3(1,0,0)),f.x),
+                 mix(h31(i+vec3(0,1,0)),h31(i+vec3(1,1,0)),f.x), f.y),
+             mix(mix(h31(i+vec3(0,0,1)),h31(i+vec3(1,0,1)),f.x),
+                 mix(h31(i+vec3(0,1,1)),h31(i+vec3(1,1,1)),f.x), f.y),
+             f.z);
+         }`)
+      .replace('#include <color_fragment>',
+        `#include <color_fragment>
+
+         /* ── Fresnel: edges face away from camera → blend with env ── */
+         vec3  viewDir = normalize(cameraPosition - vWorldPos);
+         float cosA    = max(dot(normalize(vNormal), viewDir), 0.0);
+         float fresnel  = pow(1.0 - cosA, 2.5) * uCamoScore;
+
+         /* ── Value-noise layers: simulate surface texture matching ── */
+         float n1 = vn3(vWorldPos * 7.0  + uTime * 0.04) * 0.055 * uCamoScore;
+         float n2 = vn3(vWorldPos * 19.0)                * 0.030 * uCamoScore;
+
+         /* ── Global env tint (subtle background-colour pull) ── */
+         vec3 tinted = mix(diffuseColor.rgb, uEnvColor, uCamoScore * 0.09 + n2);
+
+         /* ── Edge dissolve into env ── */
+         vec3 edged  = mix(tinted, uEnvColor, clamp(fresnel * 0.55 + n1, 0.0, 0.85));
+
+         diffuseColor.rgb = mix(tinted, edged, uCamoScore * 0.65);
+
+         /* ── Opacity: 1.0 → 0.78 as camo rises (never invisible) ── */
+         diffuseColor.a  *= (1.0 - uCamoScore * 0.22);`);
+  };
+
+  return mat;
+}
+
+/* Estimate env colour at a world position via quick raycasts */
+function estimateEnvColor(worldPos, targetColor){
+  _scanRay.far = 5.0;
+  const pos = worldPos.clone(); pos.y += 0.8;
+  const hits = [];
+  [[1,0,0],[-1,0,0],[0,0,1],[0,0,-1],[0,-1,0]].forEach(d=>{
+    _scanRay.set(pos, new THREE.Vector3(...d));
+    const ix = _scanRay.intersectObjects(scene.children, true);
+    const h  = ix.find(i=>i.object.isMesh && !i.object.userData.playerId);
+    if(h?.object.material?.color)
+      hits.push({ c:h.object.material.color, w:1/(h.distance+0.3) });
+  });
+  if(!hits.length){ targetColor.setRGB(0.6,0.6,0.6); return; }
+  const W = hits.reduce((s,h)=>s+h.w, 0);
+  targetColor.setRGB(
+    hits.reduce((s,h)=>s+h.c.r*h.w,0)/W,
+    hits.reduce((s,h)=>s+h.c.g*h.w,0)/W,
+    hits.reduce((s,h)=>s+h.c.b*h.w,0)/W,
+  );
+}
+
+
 
 // ═══════════════════════════════════════════════════
 //  🔊  AUDIO ENGINE
@@ -350,6 +497,9 @@ function enterGame(roomData){
   buildPalette();
   document.getElementById('gameCanvas').addEventListener('click',onCanvasClick);
   if(!animating){animating=true;requestAnimationFrame(loop);}
+  // Auto fullscreen + wake lock on game start (mobile)
+  if(IS_MOBILE && !IS_IOS){ enterFullscreen(); }
+  requestWakeLock();
 }
 
 // ═══════════════════════════════════════════════════
@@ -840,20 +990,22 @@ function createChar(hexColor,name,customization){
     ?parseInt(customization.skinColor.replace('#',''),16)
     :(typeof hexColor==='number'?hexColor:parseInt(String(hexColor).replace('#',''),16));
   const c=bodyC;
-  const mat=()=>new THREE.MeshStandardMaterial({color:c,roughness:0.65});
-  const lLeg=addCharPart(g,new THREE.BoxGeometry(0.23,0.56,0.23),mat(),[-0.16,0.28,0]);
-  const rLeg=addCharPart(g,new THREE.BoxGeometry(0.23,0.56,0.23),mat(),[ 0.16,0.28,0]);
-  const body=addCharPart(g,new THREE.BoxGeometry(0.56,0.72,0.28),mat(),[0,0.9,0]);
-  const lArm=addCharPart(g,new THREE.BoxGeometry(0.19,0.62,0.19),mat(),[-0.38,0.88,0]);
-  const rArm=addCharPart(g,new THREE.BoxGeometry(0.19,0.62,0.19),mat(),[ 0.38,0.88,0]);
-  const head=addCharPart(g,new THREE.BoxGeometry(0.44,0.44,0.44),mat(),[0,1.48,0]);
+  // Shared camo material — all body parts use the same instance
+  // so one uniform update applies to the entire character
+  const bodyMat = createCamoMaterial(c);
+  const lLeg=addCharPart(g,new THREE.BoxGeometry(0.23,0.56,0.23),bodyMat,[-0.16,0.28,0]);
+  const rLeg=addCharPart(g,new THREE.BoxGeometry(0.23,0.56,0.23),bodyMat,[ 0.16,0.28,0]);
+  const body=addCharPart(g,new THREE.BoxGeometry(0.56,0.72,0.28),bodyMat,[0,0.9,0]);
+  const lArm=addCharPart(g,new THREE.BoxGeometry(0.19,0.62,0.19),bodyMat,[-0.38,0.88,0]);
+  const rArm=addCharPart(g,new THREE.BoxGeometry(0.19,0.62,0.19),bodyMat,[ 0.38,0.88,0]);
+  const head=addCharPart(g,new THREE.BoxGeometry(0.44,0.44,0.44),bodyMat,[0,1.48,0]);
   const eyeC=c===0xff4500?0xffff00:0x222222;
   const eyeM=new THREE.MeshStandardMaterial({color:eyeC});
   addCharPart(g,new THREE.SphereGeometry(0.045,6,6),eyeM,[-0.1,1.52,0.22]);
   addCharPart(g,new THREE.SphereGeometry(0.045,6,6),eyeM,[ 0.1,1.52,0.22]);
   // Hat
   if(customization?.hat) addHat(g,customization.hat);
-  g.userData={lLeg,rLeg,body,lArm,rArm,head,color:c,walkT:0,moving:false,isGhost:false,emote:null,emoteT:0};
+  g.userData={lLeg,rLeg,body,lArm,rArm,head,color:c,bodyMat,walkT:0,moving:false,isGhost:false,emote:null,emoteT:0};
   if(name){const sp=makeLabel(name);sp.position.y=2.45;g.add(sp);}
   g.traverse(m=>{if(m.isMesh)m.castShadow=true});
   return g;
@@ -870,21 +1022,28 @@ function spawnPlayer(pdata){
   const hex=parseInt((pdata.bodyColor||'#ffffff').replace('#',''),16);
   const mesh=createChar(hex,pdata.name,pdata.customization);
   mesh.position.set(pdata.position.x,0,pdata.position.z);mesh.rotation.y=pdata.rotY||0;
-  scene.add(mesh);playerMeshes[pdata.id]=mesh;
-  // Give seekers their glow immediately on spawn
+  // Tag every child mesh with playerId for raycaster hit-detection
+  mesh.traverse(m=>{ if(m.isMesh) m.userData.playerId = pdata.id; });
+  scene.add(mesh); playerMeshes[pdata.id]=mesh;
   if(pdata.role==='seeker') setSeekerGlow(pdata.id,true);
 }
 function setCharColor(id,colorStr){
-  const mesh=playerMeshes[id];if(!mesh)return;
+  const mesh=playerMeshes[id]; if(!mesh) return;
   const c=parseInt(colorStr.replace('#',''),16);
-  mesh.traverse(m=>{
-    if(m.isMesh&&m.material&&m.material.color){
-      const cur=m.material.color.getHex();
-      if(cur!==0xffff00&&cur!==0x222222&&cur!==0xffd700&&cur!==0xff1744&&cur!==0xfff176&&cur!==0x1a1a1a&&cur!==0xff80ab&&cur!==0x1565c0){
-        m.material=m.material.clone();m.material.color.setHex(c);
+  if(mesh.userData.bodyMat){
+    // Direct colour update on the shared camo material (no clone = shader preserved)
+    mesh.userData.bodyMat.color.setHex(c);
+  } else {
+    // Fallback for ghost / hat sub-materials
+    mesh.traverse(m=>{
+      if(m.isMesh&&m.material&&m.material.color){
+        const cur=m.material.color.getHex();
+        if(cur!==0xffff00&&cur!==0x222222&&cur!==0xffd700&&cur!==0xff1744&&cur!==0xfff176&&cur!==0x1a1a1a&&cur!==0xff80ab&&cur!==0x1565c0){
+          m.material.color.setHex(c);
+        }
       }
-    }
-  });
+    });
+  }
   mesh.userData.color=c;
 }
 function applyPose(id,pose){
@@ -925,14 +1084,19 @@ function pulseSeekerGlows(){
   });
 }
 function makeGhost(id){
-  const mesh=playerMeshes[id];if(!mesh)return;
+  const mesh=playerMeshes[id]; if(!mesh) return;
+  const ghostMat=new THREE.MeshStandardMaterial({
+    color:0x9090cc, transparent:true,
+    opacity:id===myId?0.55:0.28, depthWrite:false, roughness:0.5,
+  });
   mesh.traverse(m=>{
     if(m.isMesh&&m.material){
-      m.material=m.material.clone();m.material.transparent=true;
-      m.material.opacity=id===myId?0.55:0.28;m.material.color.setHex(0x9090cc);m.material.depthWrite=false;
+      const cur=m.material.color?.getHex();
+      if(cur===0xffff00||cur===0x222222) return;
+      m.material=ghostMat;
     }
   });
-  mesh.userData.isGhost=true;
+  mesh.userData.bodyMat=null; mesh.userData.isGhost=true;
 }
 
 // ═══════════════════════════════════════════════════
@@ -1191,6 +1355,16 @@ function loop(){
   camoTick+=dt;if(camoTick>1.5){camoTick=0;computeCamoScore();}
   updateMinimap();
   pulseSeekerGlows();
+  // Tick time uniform on all camo materials (drives noise animation)
+  { const t=clock.getElapsedTime();
+    Object.values(playerMeshes).forEach(m=>{
+      if(m.userData.bodyMat?.userData.camoUniforms)
+        m.userData.bodyMat.userData.camoUniforms.utime.value=t;
+    }); }
+  updateCrosshair();
+  updateShimmer(dt);
+  // Detection cooldown tick
+  if(detectionCooldown > 0) detectionCooldown = Math.max(0, detectionCooldown - dt);
   renderer.render(scene,camera);
 }
 
@@ -1198,30 +1372,99 @@ function loop(){
 //  CAMO SCORE
 // ═══════════════════════════════════════════════════
 
-function computeCamoScore(){
-  if(!myMesh||myRole!=='hider'||!renderer) return;
-  renderer.render(scene,camera);
-  const gl=renderer.getContext(),buf=new Uint8Array(4);
-  const W=renderer.domElement.width,H=renderer.domElement.height;
-  const v=myMesh.position.clone();v.y=0.1;v.project(camera);
-  const sx=Math.round((v.x*0.5+0.5)*W),sy=Math.round((1-(v.y*0.5+0.5))*H);
-  const samples=[];
-  for(let i=0;i<8;i++){const a=i*Math.PI/4,px=sx+Math.round(Math.cos(a)*80),py=sy+Math.round(Math.sin(a)*80);if(px<0||px>=W||py<0||py>=H) continue;gl.readPixels(px,H-py,1,1,gl.RGBA,gl.UNSIGNED_BYTE,buf);samples.push({r:buf[0],g:buf[1],b:buf[2]});}
-  if(!samples.length) return;
-  const avgR=samples.reduce((s,p)=>s+p.r,0)/samples.length;
-  const avgG=samples.reduce((s,p)=>s+p.g,0)/samples.length;
-  const avgB=samples.reduce((s,p)=>s+p.b,0)/samples.length;
-  const bc2=myMesh.userData.color||0xffffff;
-  const br=(bc2>>16)&0xff,bg=(bc2>>8)&0xff,bb=bc2&0xff;
-  camoScore=Math.max(0,Math.round((1-Math.sqrt((br-avgR)**2+(bg-avgG)**2+(bb-avgB)**2)/441)*100));
-  updateCamoUI(camoScore);
-  socket.emit('camoUpdate',{score:camoScore});
+// ── Scan directions for raycasting ──────────────────────────────
+const _SCAN_DIRS = [
+  [1,0,0],[-1,0,0],[0,0,1],[0,0,-1],
+  [0.707,0,0.707],[-0.707,0,0.707],[0.707,0,-0.707],[-0.707,0,-0.707],
+  [0,-1,0], // floor
+].map(d=>new THREE.Vector3(...d).normalize());
+
+function computeEnhancedCamoScore(){
+  if(!myMesh || myRole!=='hider' || !scene) return;
+
+  const bodyC = new THREE.Color(myMesh.userData.color || 0xffffff);
+  const pos   = myMesh.position.clone(); pos.y += 0.8; // sample at chest height
+  _scanRay.far = 4.5;
+
+  // ── 1. Raycast 9 directions, collect surface colours ──────────
+  const hits = [];
+  _SCAN_DIRS.forEach(dir => {
+    _scanRay.set(pos, dir);
+    const ix = _scanRay.intersectObjects(scene.children, true);
+    const h  = ix.find(i => i.object.isMesh && !i.object.userData.playerId);
+    if(h?.object.material?.color){
+      const sc = h.object.material.color;
+      const w  = 1 / (h.distance + 0.3);              // closer = more weight
+
+      // Luminance-weighted Delta-E approximation (perceptual colour distance)
+      const dr = bodyC.r - sc.r, dg = bodyC.g - sc.g, db = bodyC.b - sc.b;
+      const de = Math.sqrt(dr*dr*0.299 + dg*dg*0.587 + db*db*0.114);
+      const match = Math.max(0, 1 - de * 2.2);        // de ≥ 0.45 → 0% match
+
+      hits.push({ match, w, color: sc.clone(), dist: h.distance });
+    }
+  });
+
+  // ── 2. Colour proximity factor (0-100, weight 55%) ────────────
+  let colorFactor = 0;
+  let bestEnvColor = new THREE.Color(0.55, 0.55, 0.55);
+  if(hits.length){
+    const W = hits.reduce((s,h)=>s+h.w, 0);
+    colorFactor = hits.reduce((s,h)=>s+h.match*h.w, 0) / W * 100;
+    // Weighted-average env colour for shader
+    bestEnvColor.setRGB(
+      hits.reduce((s,h)=>s+h.color.r*h.w,0)/W,
+      hits.reduce((s,h)=>s+h.color.g*h.w,0)/W,
+      hits.reduce((s,h)=>s+h.color.b*h.w,0)/W,
+    );
+  }
+
+  // ── 3. Surface proximity factor (0-100, weight 20%) ───────────
+  const minDist       = hits.length ? Math.min(...hits.map(h=>h.dist)) : 4.5;
+  const proximityFactor = Math.max(0, 1 - minDist/3) * 100;
+
+  // ── 4. Pose bonus (0-15 pts) ──────────────────────────────────
+  const poseBonus = curPose==='wall-flat' ? 15 : curPose==='crouch' ? 8 : 0;
+
+  // ── 5. Movement penalty (0-25 pts) ────────────────────────────
+  const movePenalty = myMesh.userData.moving ? 25 : 0;
+
+  // ── 6. Final weighted score ───────────────────────────────────
+  const raw  = colorFactor*0.55 + proximityFactor*0.20 + poseBonus - movePenalty;
+  camoScore  = Math.max(0, Math.min(100, Math.round(raw)));
+
+  // ── 7. Push to camo bar + shader uniforms ─────────────────────
+  updateCamoUI(camoScore, { colorFactor, proximityFactor, poseBonus, movePenalty });
+
+  if(myMesh.userData.bodyMat?.userData.camoUniforms){
+    const u = myMesh.userData.bodyMat.userData.camoUniforms;
+    u.envColor.value.copy(bestEnvColor);
+    u.camoScore.value = camoScore / 100;
+  }
+
+  socket.emit('camoUpdate', { score: camoScore });
 }
-function updateCamoUI(score){
+
+// Keep old name as alias (called in loop)
+const computeCamoScore = computeEnhancedCamoScore;
+function updateCamoUI(score, breakdown){
   const fill=document.getElementById('camoFill'),num=document.getElementById('camoNum');
   if(!fill||!num) return;
-  fill.style.width=score+'%';num.textContent=score+'%';
-  if(score>=70)num.style.color='#69f0ae';else if(score>=40)num.style.color='#ffeb3b';else num.style.color='#ff5252';
+  fill.style.width=score+'%'; num.textContent=score+'%';
+  if(score>=70) num.style.color='#69f0ae';
+  else if(score>=40) num.style.color='#ffeb3b';
+  else num.style.color='#ff5252';
+
+  // Breakdown line (shows contributing factors)
+  if(breakdown){
+    const d=document.getElementById('camoDetail'); if(!d) return;
+    const parts=[];
+    parts.push(`🎨${Math.round(breakdown.colorFactor)}%`);
+    parts.push(`📍${Math.round(breakdown.proximityFactor)}%`);
+    if(breakdown.poseBonus)  parts.push(`🕴️+${breakdown.poseBonus}`);
+    if(breakdown.movePenalty) parts.push(`⚡-${breakdown.movePenalty}`);
+    d.textContent = parts.join('  ');
+  }
 }
 
 // ═══════════════════════════════════════════════════
@@ -1235,29 +1478,108 @@ function initJoystick(){
   jm.on('end',()=>{joystick.x=0;joystick.y=0;});
 }
 function initCameraControls(){
-  let dragActive=false,dragLast={x:0,y:0};
-  const cv=document.getElementById('gameCanvas');
-  cv.addEventListener('touchstart',e=>{const t=e.touches[0];if(t.clientX>innerWidth*0.4){dragActive=true;dragLast={x:t.clientX,y:t.clientY};}},{passive:true});
-  cv.addEventListener('touchmove',e=>{if(!dragActive)return;const t=e.touches[0];camTheta-=(t.clientX-dragLast.x)*0.004;camPhi=Math.max(0.1,Math.min(1.25,camPhi-(t.clientY-dragLast.y)*0.004));dragLast={x:t.clientX,y:t.clientY};},{passive:true});
-  cv.addEventListener('touchend',()=>{dragActive=false;},{passive:true});
-  // ── Pinch to zoom ───────────────────────────────────────────
-  let pinchDist0=0;
-  function touchDist(t){const dx=t[0].clientX-t[1].clientX,dy=t[0].clientY-t[1].clientY;return Math.sqrt(dx*dx+dy*dy);}
-  cv.addEventListener('touchstart',e=>{ if(e.touches.length===2){dragActive=false;pinchDist0=touchDist(e.touches);} },{passive:true});
-  cv.addEventListener('touchmove',e=>{
-    if(e.touches.length===2){
-      const d=touchDist(e.touches);
-      camDist=Math.max(CAM_D_MIN,Math.min(CAM_D_MAX,camDist+(pinchDist0-d)*0.03));
-      pinchDist0=d;
+  const cv = document.getElementById('gameCanvas');
+
+  // ── TOUCH: track each finger by its identifier ──────────────────
+  // This prevents the joystick touch and camera-drag touch from
+  // interfering — each gets its own identity tracked across events.
+  let camId   = -1;          // identifier of the camera-rotation finger
+  let camLast = {x:0,y:0};
+  let pinchIds = [];          // [id0, id1] of the two pinch fingers
+  let pinchD0  = 0;
+
+  function p2d(a,b){ const dx=a.clientX-b.clientX,dy=a.clientY-b.clientY; return Math.sqrt(dx*dx+dy*dy); }
+
+  // Is this touch landing inside the joystick zone?
+  function onJoystick(touch){
+    const el=document.getElementById('joystickZone');
+    if(!el) return false;
+    const r=el.getBoundingClientRect();
+    return touch.clientX>=r.left && touch.clientX<=r.right &&
+           touch.clientY>=r.top  && touch.clientY<=r.bottom;
+  }
+  // Is this touch on any UI button?
+  function onButton(touch){
+    const el=document.elementFromPoint(touch.clientX,touch.clientY);
+    return el && (el.tagName==='BUTTON'||el.closest('#actionBtns')||el.closest('#emoteRow')||el.closest('#paintPanel')||el.closest('.ew-item'));
+  }
+
+  cv.addEventListener('touchstart', e=>{
+    const all = Array.from(e.touches);
+
+    // Two-finger → start / update pinch
+    if(all.length >= 2){
+      if(pinchIds.length < 2){
+        pinchIds = [all[0].identifier, all[1].identifier];
+        pinchD0  = p2d(all[0], all[1]);
+      }
+      camId = -1; // cancel any single-touch drag
+      return;
+    }
+
+    // Single finger
+    const t = e.changedTouches[0];
+    if(onJoystick(t) || onButton(t)) return; // let nipplejs / buttons handle it
+    if(camId === -1){
+      camId   = t.identifier;
+      camLast = {x:t.clientX, y:t.clientY};
     }
   },{passive:true});
 
-  // ── Mouse drag (desktop) ────────────────────────────────────
-  let mDown=false,mLast={x:0,y:0};
+  cv.addEventListener('touchmove', e=>{
+    const all = Array.from(e.touches);
+
+    // Pinch zoom (2 fingers)
+    if(pinchIds.length === 2 && all.length >= 2){
+      const t0 = all.find(t=>t.identifier===pinchIds[0]);
+      const t1 = all.find(t=>t.identifier===pinchIds[1]);
+      if(t0 && t1){
+        const d = p2d(t0,t1);
+        camDist = Math.max(CAM_D_MIN, Math.min(CAM_D_MAX, camDist+(pinchD0-d)*0.03));
+        pinchD0 = d;
+      }
+      return; // don't also rotate while pinching
+    }
+
+    // Camera rotation (1 tracked finger)
+    const ct = all.find(t=>t.identifier===camId);
+    if(ct){
+      camTheta -= (ct.clientX-camLast.x)*0.005;
+      camPhi    = Math.max(0.1, Math.min(1.25, camPhi-(ct.clientY-camLast.y)*0.005));
+      camLast   = {x:ct.clientX, y:ct.clientY};
+    }
+  },{passive:true});
+
+  cv.addEventListener('touchend', e=>{
+    Array.from(e.changedTouches).forEach(t=>{
+      if(t.identifier === camId) camId = -1;
+      if(pinchIds.includes(t.identifier)){
+        pinchIds = pinchIds.filter(id=>id!==t.identifier);
+        // One finger lifted from pinch → surviving finger becomes camera drag
+        if(pinchIds.length === 1){
+          const rem = Array.from(e.touches).find(tt=>tt.identifier===pinchIds[0]);
+          if(rem && !onJoystick(rem) && !onButton(rem)){
+            camId   = rem.identifier;
+            camLast = {x:rem.clientX, y:rem.clientY};
+          }
+          pinchIds = [];
+        }
+      }
+    });
+  },{passive:true});
+
+  cv.addEventListener('touchcancel', ()=>{ camId=-1; pinchIds=[]; },{passive:true});
+
+  // ── MOUSE (desktop) ─────────────────────────────────────────────
+  let mDown=false, mLast={x:0,y:0};
   cv.addEventListener('mousedown',e=>{if(paintOpen)return;mDown=true;mLast={x:e.clientX,y:e.clientY};});
-  document.addEventListener('mousemove',e=>{if(!mDown)return;camTheta-=(e.clientX-mLast.x)*0.004;camPhi=Math.max(0.1,Math.min(1.25,camPhi-(e.clientY-mLast.y)*0.004));mLast={x:e.clientX,y:e.clientY};});
+  document.addEventListener('mousemove',e=>{
+    if(!mDown)return;
+    camTheta -= (e.clientX-mLast.x)*0.004;
+    camPhi    = Math.max(0.1,Math.min(1.25,camPhi-(e.clientY-mLast.y)*0.004));
+    mLast     = {x:e.clientX,y:e.clientY};
+  });
   document.addEventListener('mouseup',()=>{mDown=false;});
-  // Mouse wheel zoom (desktop)
   cv.addEventListener('wheel',e=>{
     camDist=Math.max(CAM_D_MIN,Math.min(CAM_D_MAX,camDist+e.deltaY*0.01));
   },{passive:true});
@@ -1275,6 +1597,7 @@ function buildPalette(){
 function togglePaint(){if(myRole!=='hider')return toast('Only hiders can paint! 🦎');paintOpen=!paintOpen;document.getElementById('paintPanel').style.display=paintOpen?'block':'none';}
 function paintSelf(color){curColor=color;setCharColor(myId,color);socket.emit('paintBody',{color});SFX.paint();document.querySelectorAll('.swatch').forEach(s=>s.classList.toggle('sel',s.style.backgroundColor===color||s.style.background===color));}
 function onCanvasClick(e){
+  if(myRole==='seeker' && gameState==='hunt'){ attemptDetection(); return; }
   if(!paintOpen) return;
   renderer.render(scene,camera);const gl=renderer.getContext(),px=new Uint8Array(4);
   const cy=renderer.domElement.height-Math.round(e.clientY*devicePixelRatio);
@@ -1300,16 +1623,151 @@ function cyclePose(){
 //  TAGGING
 // ═══════════════════════════════════════════════════
 
-function tryTag(){
-  if(myRole!=='seeker') return;
-  let closest=null,bestDist=Infinity;
-  Object.entries(playerMeshes).forEach(([id,mesh])=>{
+// ═══════════════════════════════════════════════════════════════
+//  🎯  CROSSHAIR DETECTION SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+const _ray = new THREE.Raycaster();
+let aimingAtPlayer    = null;   // player ID currently in crosshair
+let aimingSuspicion   = 0;      // 0-100
+let detectionCooldown = 0;      // seconds remaining
+let shimmerT          = 0;
+
+// ── Suspicion formula ────────────────────────────────────────────
+function calcSuspicion(dist, camo, isMoving){
+  const dF = Math.max(0, 1 - dist / 18);
+  const cF = 1 - camo / 100;
+  const mB = isMoving ? 0.35 : 0;
+  return Math.min(100, Math.max(0,
+    Math.round((dF*0.25 + cF*0.4 + mB + dF*cF*0.35) * 100)
+  ));
+}
+
+// ── Crosshair + suspicion ring update (every frame) ─────────────
+function updateCrosshair(){
+  const ch = document.getElementById('crosshair');
+  if(!ch) return;
+  if(myRole !== 'seeker' || gameState !== 'hunt'){
+    ch.style.display = 'none'; return;
+  }
+  ch.style.display = 'block';
+
+  if(detectionCooldown > 0 || !myMesh){
+    ch.className = 'cd';
+    setSuspicionRing(0, '');
+    const lbl = document.getElementById('chLabel');
+    if(lbl) lbl.textContent = detectionCooldown > 0 ? detectionCooldown.toFixed(1)+'s' : '';
+    return;
+  }
+
+  _ray.setFromCamera(new THREE.Vector2(0,0), camera);
+  const targets = [];
+  Object.entries(playerMeshes).forEach(([id, mesh])=>{
     if(id===myId||!mesh||mesh.userData.isGhost) return;
-    const d=myMesh.position.distanceTo(mesh.position);
-    if(d<bestDist){bestDist=d;closest=id;}
+    mesh.traverse(m=>{ if(m.isMesh) targets.push(m); });
   });
-  if(closest){socket.emit('tagPlayer',{targetId:closest});SFX.tag();}
-  else toast('No hider nearby! 👟');
+  const hits = _ray.intersectObjects(targets, false);
+
+  const lbl = document.getElementById('chLabel');
+  if(hits.length > 0){
+    const hitId = hits[0].object.userData.playerId;
+    if(hitId && playerMeshes[hitId]){
+      const dist   = myMesh.position.distanceTo(playerMeshes[hitId].position);
+      const camo   = hiderCamoScores[hitId] || 0;
+      const moving = playerMeshes[hitId].userData.moving || false;
+      const s      = calcSuspicion(dist, camo, moving);
+      aimingAtPlayer = hitId; aimingSuspicion = s;
+      if(s >= 60){
+        ch.className='hi'; setSuspicionRing(s,'#ff4444');
+        if(lbl) lbl.textContent='SUSPICIOUS';
+      } else if(s >= 30){
+        ch.className='md'; setSuspicionRing(s,'#ffeb3b');
+        if(lbl) lbl.textContent='Possible';
+      } else {
+        ch.className='lo'; setSuspicionRing(s,'rgba(255,255,255,.3)');
+        if(lbl) lbl.textContent='';
+      }
+      return;
+    }
+  }
+  aimingAtPlayer = null; aimingSuspicion = 0;
+  ch.className = '';
+  setSuspicionRing(0, '');
+  if(lbl) lbl.textContent = '';
+}
+
+function setSuspicionRing(pct, color){
+  const ring = document.getElementById('chRingFill');
+  if(!ring) return;
+  const circ = 2 * Math.PI * 22;
+  ring.style.strokeDasharray = `${circ * pct/100} ${circ}`;
+  ring.style.stroke = color || 'transparent';
+}
+
+// ── Fire detection attempt ───────────────────────────────────────
+function tryTag(){ attemptDetection(); }
+
+function attemptDetection(){
+  if(myRole !== 'seeker' || gameState !== 'hunt') return;
+  if(detectionCooldown > 0){ toast(`⏳ ${detectionCooldown.toFixed(1)}s cooldown`, 800); return; }
+  socket.emit('detectAttempt', { targetId: aimingAtPlayer || null });
+  SFX.tag();
+}
+
+// ── Reveal flash on caught chameleon ────────────────────────────
+function revealEffect(id){
+  const mesh = playerMeshes[id]; if(!mesh) return;
+  let fc = 0;
+  const fi = setInterval(()=>{
+    mesh.traverse(m=>{
+      if(m.isMesh && m.material && m.material.emissive){
+        const on = fc % 2 === 0;
+        m.material.emissive.setRGB(on?1:0, on?1:0, on?1:0);
+        m.material.emissiveIntensity = on ? 1.2 : 0;
+      }
+    });
+    fc++;
+    if(fc >= 8){
+      clearInterval(fi);
+      mesh.traverse(m=>{
+        if(m.isMesh && m.material && m.material.emissive){
+          m.material.emissive.setScalar(0);
+          m.material.emissiveIntensity = 1;
+        }
+      });
+    }
+  }, 80);
+}
+
+// ── Screen flash (green=hit, red=miss) ──────────────────────────
+function showDetectFlash(hit){
+  const el = document.getElementById('detectFlash');
+  if(!el) return;
+  el.className = ''; void el.offsetWidth;
+  el.className = hit ? 'hit' : 'miss';
+}
+
+// ── Shimmer: moving hiders glow faintly (rewards observation) ───
+function updateShimmer(dt){
+  if(myRole !== 'seeker' || gameState !== 'hunt') return;
+  shimmerT += dt;
+  Object.entries(playerMeshes).forEach(([id, mesh])=>{
+    if(id === myId || mesh.userData.isGhost) return;
+    const camo   = hiderCamoScores[id] || 0;
+    const moving = mesh.userData.moving || false;
+    mesh.traverse(m=>{
+      if(!m.isMesh || !m.material || !m.material.emissive) return;
+      if(moving){
+        const maxI = (1 - camo/100) * 0.13;
+        const i    = Math.abs(Math.sin(shimmerT * 12)) * maxI;
+        m.material.emissive.setRGB(i, i*0.7, 0);
+      } else {
+        const r = m.material.emissive.r;
+        if(r > 0.001) m.material.emissive.multiplyScalar(0.88);
+        else          m.material.emissive.setScalar(0);
+      }
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════
@@ -1404,8 +1862,25 @@ socket.on('playerLeft',({id,name})=>{toast(`${name} left 👋`);if(playerMeshes[
 socket.on('moved',({id,pos,rotY})=>{const m=playerMeshes[id];if(!m)return;const wasSame=Math.abs(m.position.x-pos.x)<0.01&&Math.abs(m.position.z-pos.z)<0.01;m.userData.moving=!wasSame;m.position.set(pos.x,m.position.y,pos.z);m.rotation.y=rotY;});
 socket.on('bodyPainted',({id,color})=>{if(id!==myId)setCharColor(id,color);});
 socket.on('poseChanged',({id,pose})=>{if(id!==myId)applyPose(id,pose);});
-socket.on('camoScores',scores=>{Object.assign(hiderCamoScores,scores);});
-socket.on('tagFailed',({reason})=>{SFX.denied();toast(`🚫 ${reason}`,2500);});
+socket.on('camoScores', scores => {
+  Object.assign(hiderCamoScores, scores);
+  // Push camo score into each remote player's shader uniform
+  // and estimate their environment colour via raycasting
+  Object.entries(scores).forEach(([id, score]) => {
+    if(id === myId) return;
+    const mesh = playerMeshes[id];
+    if(!mesh?.userData.bodyMat?.userData.camoUniforms) return;
+    const u = mesh.userData.bodyMat.userData.camoUniforms;
+    u.camoScore.value = score / 100;
+    estimateEnvColor(mesh.position, u.envColor.value);
+  });
+});
+socket.on('detectionResult',({hit, cooldown})=>{
+  detectionCooldown = cooldown;
+  if(hit){ showDetectFlash(true); toast('🎯 Chameleon found!', 2000); }
+  else { showDetectFlash(false); SFX.denied();
+    if(cooldown>=2) toast('⚫ Miss — environment hit (2s cooldown)', 1800); }
+});
 
 socket.on('emote',({id,key})=>{
   playEmote(id,key);
@@ -1473,12 +1948,14 @@ socket.on('huntStarted',({huntTime})=>{
     toast(msg, 3500);
   }, 600);
 });
-socket.on('playerTagged',({id,name,taggedBy})=>{
-  setCharColor(id,'#cc3333');markTagged(id);
+socket.on('playerDetected',({id, name, taggedBy})=>{
+  revealEffect(id); markTagged(id);
+  setTimeout(()=>{ setCharColor(id,'#cc3333'); makeGhost(id); }, 650);
   if(id===myId){
-    SFX.tagged();makeGhost(myId);myRole='ghost';refreshRoleUI();
-    toast('💥 Tagged! You are a ghost now — spectate freely 👻',4000);
-  }else{SFX.ping();toast(`${name} found by ${taggedBy}! 👆`);makeGhost(id);}
+    SFX.tagged();
+    setTimeout(()=>{ myRole='ghost'; refreshRoleUI(); }, 650);
+    toast('💥 You were found! Spectating as ghost 👻', 4000);
+  } else { SFX.ping(); toast(`🎯 ${name} found by ${taggedBy}!`); }
   if(playerData[id]) playerData[id].role='ghost';
 });
 

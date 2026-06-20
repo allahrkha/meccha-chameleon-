@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- PWA / fullscreen meta tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#030108" />
+  <meta name="apple-mobile-web-app-title" content="🦎 Meccha Chameleon" />
   <title>🦎 Meccha Chameleon</title>
   <style>
     *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
@@ -12,7 +18,11 @@
       font-family: 'Segoe UI', Arial, sans-serif;
       overflow: hidden;
       height: 100dvh; width: 100vw;
+      /* Prevent iOS rubber-band scroll */
+      position: fixed; top:0; left:0; right:0; bottom:0;
       -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      user-select: none;
     }
 
     /* ── LOBBY ─────────────────────────────── */
@@ -192,21 +202,30 @@
 
     /* ── MOBILE CONTROLS ─────────────────────── */
     #joystickZone {
-      position:fixed; bottom:24px; left:20px;
-      width:120px; height:120px; z-index:110;
+      position:fixed;
+      bottom:max(24px, env(safe-area-inset-bottom, 24px));
+      left:max(16px, env(safe-area-inset-left, 16px));
+      width:150px; height:150px; z-index:111;
       pointer-events:all;
+      /* Prevent the browser treating this as a scroll attempt */
+      touch-action:none;
     }
     #actionBtns {
-      position:fixed; bottom:24px; right:16px;
-      display:flex; flex-direction:column; gap:10px; z-index:110;
+      position:fixed;
+      bottom:max(24px, env(safe-area-inset-bottom, 24px));
+      right:max(16px, env(safe-area-inset-right, 16px));
+      display:flex; flex-direction:column; gap:10px; z-index:111;
     }
     .abtn {
-      width:58px; height:58px; border-radius:50%; border:none;
+      width:62px; height:62px; border-radius:50%; border:none;
       font-size:1.4em; cursor:pointer; pointer-events:all;
-      box-shadow:0 4px 12px rgba(0,0,0,.4);
+      box-shadow:0 4px 14px rgba(0,0,0,.5);
       transition: transform .12s;
+      touch-action:manipulation; /* no double-tap zoom delay */
+      -webkit-tap-highlight-color:transparent;
+      user-select:none;
     }
-    .abtn:active { transform:scale(.9); }
+    .abtn:active { transform:scale(.88); }
     #poseBtn  { background:rgba(255,235,59,.88); color:#333; }
     #paintBtn { background:rgba(0,229,255,.85); color:#333; }
     #tagBtn   { background:rgba(255,69,0,.9); color:#fff; display:none; }
@@ -309,6 +328,66 @@
       to   { transform:translateY(-20vh) scale(1); opacity:0; }
     }
 
+
+    /* ── CROSSHAIR DETECTION ──────────────────────── */
+    #crosshair {
+      position:fixed; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:60px; height:60px;
+      pointer-events:none; z-index:200;
+      display:none;
+    }
+    #chRingSvg { position:absolute; inset:0; overflow:visible; }
+    .ch-ring-bg  { fill:none; stroke:rgba(255,255,255,.1); stroke-width:2; }
+    #chRingFill  {
+      fill:none; stroke-width:2.5; stroke-linecap:round;
+      transition:stroke .15s;
+      stroke-dasharray:0 138.2;
+      stroke-dashoffset:34.5; /* start from top */
+    }
+    /* Four corner brackets */
+    .ch-c {
+      position:absolute; width:9px; height:9px;
+      border-color:rgba(255,255,255,.88); border-style:solid; border-width:0;
+      transition:border-color .15s;
+    }
+    .ch-tl{top:6px;left:6px;  border-top-width:2px;border-left-width:2px;}
+    .ch-tr{top:6px;right:6px; border-top-width:2px;border-right-width:2px;}
+    .ch-bl{bottom:6px;left:6px;  border-bottom-width:2px;border-left-width:2px;}
+    .ch-br{bottom:6px;right:6px; border-bottom-width:2px;border-right-width:2px;}
+    /* Center dot */
+    .ch-dot {
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:4px; height:4px; border-radius:50%;
+      background:rgba(255,255,255,.88);
+      transition:background .15s;
+    }
+    /* Suspicion label below crosshair */
+    #chLabel {
+      position:absolute; top:calc(100% + 5px); left:50%;
+      transform:translateX(-50%);
+      font-size:.6em; font-weight:800; letter-spacing:.1em;
+      white-space:nowrap; text-transform:uppercase;
+    }
+    /* State: aimed at suspicious target */
+    #crosshair.hi .ch-c  { border-color:#ff4444; }
+    #crosshair.hi .ch-dot{ background:#ff4444; }
+    #crosshair.md .ch-c  { border-color:#ffeb3b; }
+    #crosshair.md .ch-dot{ background:#ffeb3b; }
+    /* State: on cooldown */
+    #crosshair.cd .ch-c  { border-color:rgba(255,255,255,.25); border-style:dashed; }
+    #crosshair.cd .ch-dot{ background:rgba(255,255,255,.2); }
+    #crosshair.cd #chLabel{ color:rgba(255,255,255,.4); }
+    /* Detection screen flash */
+    #detectFlash {
+      position:fixed; inset:0; pointer-events:none; z-index:490; opacity:0;
+    }
+    #detectFlash.hit  { animation:dfHit  .55s ease-out forwards; }
+    #detectFlash.miss { animation:dfMiss .55s ease-out forwards; }
+    @keyframes dfHit  { 0%{opacity:1;background:rgba(105,240,174,.4)} 100%{opacity:0} }
+    @keyframes dfMiss { 0%{opacity:1;background:rgba(255,60,60,.32)}  100%{opacity:0} }
+
     /* ── EMOTE WHEEL ──────────────────────────── */
     #emoteWheel {
       position:fixed; z-index:500; width:200px; height:200px;
@@ -400,6 +479,15 @@
 
   <!-- Tap anywhere hint (mobile) -->
   <div id="introTapHint">Tap anywhere to skip</div>
+</div>
+
+
+<!-- iOS fullscreen hint (shown manually) -->
+<div id="iosHint" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9000;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px">
+  <div style="font-size:3em;margin-bottom:16px">📱</div>
+  <h2 style="margin-bottom:10px;font-size:1.4em">Full Screen on iOS</h2>
+  <p style="color:#aaa;margin-bottom:24px;line-height:1.6">Tap the <strong>Share button</strong> ↑ at the bottom of Safari,<br>then tap <strong>"Add to Home Screen"</strong>.<br>Open the app icon for true fullscreen.</p>
+  <button onclick="document.getElementById('iosHint').style.display='none'" style="padding:12px 28px;border-radius:10px;border:none;background:linear-gradient(90deg,#00e5ff,#1976d2);color:#fff;font-size:1em;font-weight:700;cursor:pointer">Got it</button>
 </div>
 
 <!-- ════════ LOBBY ════════ -->
@@ -499,6 +587,7 @@
         </div>
         <span id="camoNum" style="font-size:.78em;font-weight:700;min-width:34px;text-align:right;color:#69f0ae">0%</span>
       </div>
+      <div id="camoDetail" style="font-size:.66em;color:rgba(255,255,255,.38);margin-top:3px;letter-spacing:.02em;text-align:right"></div>
     </div>
   </div>
 

@@ -252,36 +252,77 @@ io.on('connection', socket => {
   });
 
   // ── Tag Player ───────────────────────────────────
-  socket.on('tagPlayer', ({targetId}) => {
-    const code=socket.data.roomCode;
-    if (!rooms[code]||rooms[code].state!=='hunt') return;
-    const seeker=rooms[code].players[socket.id];
-    const target=rooms[code].players[targetId];
-    if (!seeker||seeker.role!=='seeker') return;
-    if (!target||target.tagged) return;
+  // ── Crosshair Detection (replaces old tag system) ───────────────────
+  socket.on('detectAttempt', ({ targetId }) => {
+    const code = socket.data.roomCode;
+    if (!rooms[code] || rooms[code].state !== 'hunt') return;
+    const seeker = rooms[code].players[socket.id];
+    if (!seeker || seeker.role !== 'seeker') return;
 
-    const dx=seeker.position.x-target.position.x;
-    const dz=seeker.position.z-target.position.z;
-    const dist=Math.sqrt(dx*dx+dz*dz);
-    const maxDist=tagRange(target.camoScore);
-    if (dist>maxDist) {
-      const tip=target.camoScore>60?' (well hidden!)':'';
-      return socket.emit('tagFailed',{reason:`Too far — ${Math.round(dist*10)/10}m away, need ${Math.round(maxDist*10)/10}m${tip}`});
+    const now = Date.now();
+
+    // ─ Server-side cooldown enforcement ─
+    const cooldownMs = (seeker._detectCooldown || 0) * 1000;
+    if (seeker._lastDetect && (now - seeker._lastDetect) < cooldownMs) return;
+
+    // ─ No targetId = client hit environment ─
+    if (!targetId) {
+      seeker._lastDetect = now;
+      seeker._detectCooldown = 2;
+      return socket.emit('detectionResult', { hit: false, cooldown: 2 });
     }
 
-    target.tagged  = true;
-    target.taggedAt= rooms[code].huntStartTime
-      ? Math.floor((Date.now()-rooms[code].huntStartTime)/1000) : null;
+    const target = rooms[code].players[targetId];
 
-    io.to(code).emit('playerTagged',{id:targetId,name:target.name,taggedBy:seeker.name,taggedAt:target.taggedAt});
-
-    if (rooms[code].mode==='infection') {
-      target.role='seeker'; target.bodyColor='#FF4500';
-      io.to(code).emit('roleChanged',{id:targetId,role:'seeker',color:'#FF4500'});
+    // ─ Invalid target (environment object ID sent, already tagged, wrong role) ─
+    if (!target || target.role !== 'hider' || target.tagged) {
+      seeker._lastDetect = now;
+      seeker._detectCooldown = 2;
+      return socket.emit('detectionResult', { hit: false, cooldown: 2 });
     }
 
-    const alive=Object.values(rooms[code].players).filter(p=>p.role==='hider'&&!p.tagged);
-    if (!alive.length) endRound(code,'seekers','👁️ All hiders found! Seekers win!');
+    // ─ Distance plausibility check (anti-cheat) ─
+    const dx  = seeker.position.x - target.position.x;
+    const dz  = seeker.position.z - target.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist > 30) { // > 30 units = impossible raycast, reject
+      seeker._lastDetect = now;
+      seeker._detectCooldown = 2;
+      return socket.emit('detectionResult', { hit: false, cooldown: 2 });
+    }
+
+    // ─ Server-side suspicion score (simplified, no movement) ─
+    const distFactor  = Math.max(0, 1 - dist / 18);
+    const camoFactor  = 1 - (target.camoScore || 0) / 100;
+    const serverSus   = Math.min(100, Math.round((distFactor * 0.3 + camoFactor * 0.5 + distFactor * camoFactor * 0.2) * 100));
+
+    // ─ CONFIRMED DETECTION ─
+    target.tagged   = true;
+    target.taggedAt = rooms[code].huntStartTime
+      ? Math.floor((Date.now() - rooms[code].huntStartTime) / 1000) : null;
+
+    seeker._lastDetect      = now;
+    seeker._detectCooldown  = 0.5;
+
+    // Tell seeker they hit
+    socket.emit('detectionResult', { hit: true, cooldown: 0.5, targetId });
+
+    // Tell everyone the chameleon was found
+    io.to(code).emit('playerDetected', {
+      id: targetId, name: target.name,
+      taggedBy: seeker.name, taggedAt: target.taggedAt,
+      suspicion: serverSus,
+    });
+
+    // Infection mode
+    if (rooms[code].mode === 'infection') {
+      target.role = 'seeker'; target.bodyColor = '#FF4500';
+      io.to(code).emit('roleChanged', { id: targetId, role: 'seeker', color: '#FF4500' });
+    }
+
+    // Win condition
+    const alive = Object.values(rooms[code].players).filter(p => p.role === 'hider' && !p.tagged);
+    if (!alive.length) endRound(code, 'seekers', '🎯 All chameleons found! Seekers win!');
   });
 
   // ── Paint / Pose / Emote ─────────────────────────
