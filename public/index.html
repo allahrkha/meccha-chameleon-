@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>🦎 Meccha Chameleon</title>
+  <style>
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background: #12082a;
+      color: #fff;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      overflow: hidden;
+      height: 100dvh; width: 100vw;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── LOBBY ─────────────────────────────── */
+    #lobby {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      height: 100dvh; padding: 24px;
+      background: radial-gradient(ellipse at 50% 0%, #2d1b69 0%, #12082a 70%);
+    }
+    .logo {
+      font-size: clamp(2rem, 8vw, 3.2rem);
+      font-weight: 900; text-align: center;
+      background: linear-gradient(90deg,#00e5ff,#69f0ae,#ffeb3b,#ff4081);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      line-height: 1.1; margin-bottom: 6px;
+    }
+    .tagline { color:#8888aa; font-size:.9em; margin-bottom:28px; text-align:center; }
+    .card {
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 18px; padding: 22px;
+      width: 100%; max-width: 360px; margin-bottom: 14px;
+    }
+    input {
+      width: 100%; padding: 12px 14px;
+      border-radius: 10px;
+      border: 2px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.08);
+      color: #fff; font-size: 1em; margin-bottom: 10px;
+      outline: none; transition: border-color .2s;
+    }
+    input::placeholder { color: rgba(255,255,255,0.35); }
+    input:focus { border-color: #00e5ff; }
+    #joinCode { text-transform:uppercase; letter-spacing:4px; text-align:center; }
+    button {
+      width:100%; padding:13px; border-radius:10px; border:none;
+      font-size:1em; font-weight:700; cursor:pointer;
+      transition: transform .15s, opacity .15s;
+      margin-bottom: 8px;
+    }
+    button:active { transform:scale(.96); opacity:.9; }
+    .btn-create { background: linear-gradient(90deg,#00e5ff,#1976d2); color:#fff; }
+    .btn-join   { background: linear-gradient(90deg,#69f0ae,#1de9b6); color:#12082a; }
+    .btn-start  { background: linear-gradient(90deg,#ffeb3b,#ff9800); color:#12082a; }
+    .btn-back   { background: rgba(255,255,255,0.1); color:#aaa; font-size:.85em; margin-top:4px; }
+    .or { text-align:center; color:#555; margin:6px 0; font-size:.8em; }
+
+    /* ── ROOM LOBBY ──────────────────────────── */
+    #roomLobby { display:none; }
+    #roomLobby .inner {
+      display:flex; flex-direction:column; align-items:center;
+      justify-content:center; height:100dvh; padding:20px;
+    }
+    .room-code {
+      font-size:clamp(2.5rem,10vw,3.5rem); font-weight:900;
+      letter-spacing:10px; color:#ffeb3b; text-align:center; margin-bottom:4px;
+    }
+    .room-label { color:#777; font-size:.78em; text-align:center; margin-bottom:18px; }
+    .player-list { list-style:none; width:100%; }
+    .player-item {
+      display:flex; align-items:center; gap:10px;
+      padding:9px 0; border-bottom:1px solid rgba(255,255,255,0.07);
+      font-size:.95em;
+    }
+    .pdot { width:9px; height:9px; border-radius:50%; background:#69f0ae; flex-shrink:0; }
+    .prole {
+      margin-left:auto; font-size:.72em; padding:3px 10px;
+      border-radius:20px; font-weight:700;
+    }
+    .role-hider  { background:rgba(105,240,174,0.18); color:#69f0ae; }
+    .role-seeker { background:rgba(255,69,0,0.2);    color:#FF6030; }
+
+    select {
+      width:100%; padding:10px 12px;
+      background:rgba(255,255,255,0.08);
+      border:1px solid rgba(255,255,255,0.18);
+      border-radius:8px; color:#fff; font-size:.9em; margin-bottom:12px;
+    }
+
+    /* ── GAME VIEW ───────────────────────────── */
+    #gameContainer { display:none; position:fixed; inset:0; }
+    #gameCanvas { display:block; width:100%; height:100%; touch-action:none; }
+
+    /* ── HUD ─────────────────────────────────── */
+    #hud {
+      position:fixed; top:0; left:0; right:0;
+      pointer-events:none; z-index:100;
+    }
+    #hudTop {
+      display:flex; justify-content:space-between; align-items:center;
+      padding:10px 14px;
+      background:linear-gradient(180deg,rgba(0,0,0,.55),transparent);
+    }
+    #phaseLabel {
+      font-size:.82em; font-weight:700; padding:4px 12px;
+      border-radius:20px; background:rgba(255,255,255,.18);
+    }
+    .phase-PREP { background:rgba(255,235,59,.35)!important; color:#ffeb3b; }
+    .phase-HUNT { background:rgba(255,69,0,.35)!important; color:#FF6030; }
+    #timerDisplay { font-size:1.5em; font-weight:900; min-width:60px; text-align:center; }
+    #myRoleBadge { font-size:.82em; font-weight:700; padding:4px 12px; border-radius:20px; }
+    #hiderIcons { display:flex; gap:6px; padding:6px 14px; flex-wrap:wrap; }
+    .hider-icon { font-size:1.2em; transition:filter .3s; }
+    .hider-icon.tagged { filter:grayscale(1) opacity(.4); }
+
+    /* ── MOBILE CONTROLS ─────────────────────── */
+    #joystickZone {
+      position:fixed; bottom:24px; left:20px;
+      width:120px; height:120px; z-index:110;
+      pointer-events:all;
+    }
+    #actionBtns {
+      position:fixed; bottom:24px; right:16px;
+      display:flex; flex-direction:column; gap:10px; z-index:110;
+    }
+    .abtn {
+      width:58px; height:58px; border-radius:50%; border:none;
+      font-size:1.4em; cursor:pointer; pointer-events:all;
+      box-shadow:0 4px 12px rgba(0,0,0,.4);
+      transition: transform .12s;
+    }
+    .abtn:active { transform:scale(.9); }
+    #poseBtn  { background:rgba(255,235,59,.88); color:#333; }
+    #paintBtn { background:rgba(0,229,255,.85); color:#333; }
+    #tagBtn   { background:rgba(255,69,0,.9); color:#fff; display:none; }
+
+    /* ── PAINT PANEL ─────────────────────────── */
+    #paintPanel {
+      position:fixed; bottom:100px; right:86px;
+      background:rgba(14,10,30,.95);
+      border:1px solid rgba(255,255,255,.18);
+      border-radius:16px; padding:14px;
+      display:none; z-index:200; pointer-events:all;
+      min-width:200px;
+    }
+    .pt { font-size:.75em; color:#aaa; margin-bottom:8px; }
+    .swatches { display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin-bottom:9px; }
+    .swatch {
+      width:30px; height:30px; border-radius:6px; cursor:pointer;
+      border:2px solid transparent; transition:transform .12s;
+    }
+    .swatch:hover,.swatch.sel { border-color:#fff; transform:scale(1.12); }
+    #cpick { width:100%; height:34px; border-radius:6px; border:none; cursor:pointer; }
+    .eyedrop-hint { font-size:.7em; color:#666; margin-top:6px; text-align:center; }
+
+    /* ── OVERLAYS ────────────────────────────── */
+    .overlay {
+      position:fixed; inset:0;
+      background:rgba(0,0,0,.82);
+      display:none; flex-direction:column;
+      align-items:center; justify-content:center;
+      z-index:400; text-align:center; padding:24px;
+    }
+    .overlay h2 { font-size:clamp(1.6rem,6vw,2.4rem); margin-bottom:12px; }
+    .overlay p  { color:#aaa; margin-bottom:20px; font-size:.95em; }
+    .big-num { font-size:5em; font-weight:900; color:#ffeb3b; line-height:1; }
+
+    /* ── TOAST ───────────────────────────────── */
+    #toast {
+      position:fixed; top:68px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,.82); color:#fff;
+      padding:7px 18px; border-radius:20px; font-size:.88em;
+      display:none; z-index:600; white-space:nowrap;
+      pointer-events:none;
+    }
+
+
+    /* ── SEEKER PREP BLACKOUT ─────────────────── */
+    #seekerPrepOverlay {
+      position:fixed; inset:0; z-index:800;
+      background:#030108;
+      display:none; flex-direction:column;
+      align-items:center; justify-content:center;
+      text-align:center; padding:24px;
+    }
+    #seekerPrepOverlay.sov-fadeout {
+      animation: sovFade .5s ease-in forwards;
+    }
+    @keyframes sovFade { to { opacity:0; transform:scale(1.04); } }
+
+    .sov-eyes {
+      font-size:5.5em; line-height:1;
+      animation: eyePulse 1.8s ease-in-out infinite;
+      margin-bottom:16px;
+    }
+    @keyframes eyePulse {
+      0%,100% { transform:scale(1) rotate(-3deg); }
+      50%      { transform:scale(1.12) rotate(3deg); }
+    }
+    .sov-title {
+      font-size:clamp(1.8rem,7vw,2.8rem);
+      font-weight:900; color:#fff;
+      letter-spacing:.04em; margin-bottom:8px;
+    }
+    .sov-sub {
+      font-size:.95em; color:#7766aa;
+      margin-bottom:28px; transition:color .4s;
+    }
+    .sov-timer {
+      font-size:clamp(4rem,15vw,7rem);
+      font-weight:900; line-height:1;
+      background:linear-gradient(135deg,#ff4081,#ff6d00);
+      -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+      margin-bottom:8px;
+    }
+    .sov-hint {
+      font-size:.78em; color:#443355; margin-top:6px;
+    }
+    /* Floating dots background effect */
+    .sov-dots {
+      position:absolute; inset:0; overflow:hidden; pointer-events:none;
+    }
+    .sov-dot {
+      position:absolute; border-radius:50%;
+      background:rgba(255,64,129,.06);
+      animation:dotFloat linear infinite;
+    }
+    @keyframes dotFloat {
+      from { transform:translateY(100vh) scale(0); opacity:0; }
+      10%  { opacity:1; }
+      90%  { opacity:.4; }
+      to   { transform:translateY(-20vh) scale(1); opacity:0; }
+    }
+
+    /* ── EMOTE WHEEL ──────────────────────────── */
+    #emoteWheel {
+      position:fixed; z-index:500; width:200px; height:200px;
+      transform:translate(-50%,-50%); display:none; pointer-events:none;
+    }
+    #emoteWheel.ew-visible {
+      display:block;
+      animation: ewPop .17s cubic-bezier(.34,1.56,.64,1) forwards;
+    }
+    #emoteWheel.ew-hide {
+      display:block;
+      animation: ewFade .18s ease-in forwards;
+    }
+    @keyframes ewPop  {
+      from { opacity:0; transform:translate(-50%,-50%) scale(.5); }
+      to   { opacity:1; transform:translate(-50%,-50%) scale(1);  }
+    }
+    @keyframes ewFade {
+      from { opacity:1; transform:translate(-50%,-50%) scale(1);   }
+      to   { opacity:0; transform:translate(-50%,-50%) scale(.72); }
+    }
+    .ew-bg {
+      position:absolute; inset:0; border-radius:50%;
+      background:rgba(8,4,24,.82);
+      border:1.5px solid rgba(255,255,255,.18);
+      backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+      box-shadow:0 8px 36px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08);
+    }
+    .ew-center {
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:42px; height:42px; border-radius:50%;
+      background:rgba(255,255,255,.1);
+      border:2px solid rgba(255,255,255,.22); z-index:2;
+    }
+    .ew-item {
+      position:absolute; left:50%; top:50%;
+      width:58px; height:58px; border-radius:50%;
+      background:rgba(255,255,255,.09);
+      border:2px solid rgba(255,255,255,.18);
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      font-size:1.5em; line-height:1.1;
+      z-index:2; user-select:none;
+      transform:translate(calc(-50% + var(--tx)), calc(-50% + var(--ty)));
+      transition:background .1s, border-color .08s, transform .1s;
+    }
+    .ew-item span {
+      font-size:.26em; color:rgba(255,255,255,.55);
+      margin-top:1px; text-transform:capitalize;
+    }
+    .ew-item.hl {
+      background:rgba(255,235,59,.3);
+      border-color:#ffeb3b;
+      transform:translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(1.25);
+      box-shadow:0 0 16px rgba(255,235,59,.45);
+    }
+    .ew-hint {
+      position:absolute; bottom:-26px; left:50%;
+      transform:translateX(-50%);
+      font-size:.7em; color:rgba(255,255,255,.45);
+      white-space:nowrap; text-align:center;
+    }
+    #emoteWheelBtn::after {
+      content:''; display:block; width:5px; height:5px; border-radius:50%;
+      background:rgba(255,255,255,.55); margin:2px auto -3px;
+    }
+
+  </style>
+</head>
+<body>
+
+<!-- ════════ LOBBY ════════ -->
+<div id="lobby">
+  <div class="logo">🦎 MECCHA<br>CHAMELEON</div>
+  <div class="tagline">Paint yourself. Blend in. Survive.</div>
+
+  <div class="card">
+    <input id="playerName" placeholder="Your name" maxlength="16" />
+
+    <!-- Character Customization -->
+    <div style="background:rgba(255,255,255,0.05);border-radius:10px;padding:12px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:.78em;color:#aaa">🎨 Customize</span>
+        <div id="charPreview" style="min-width:30px;text-align:center"></div>
+      </div>
+      <div style="font-size:.72em;color:#666;margin-bottom:5px">Skin</div>
+      <div id="skinPicker" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+      <div style="font-size:.72em;color:#666;margin-bottom:5px">Hat</div>
+      <div id="hatPicker" style="display:flex;gap:5px;flex-wrap:wrap"></div>
+    </div>
+
+    <button class="btn-create" onclick="createRoom()">🏠 Create Room</button>
+    <div class="or">── or ──</div>
+    <input id="joinCode" placeholder="Room code" maxlength="6" />
+    <button class="btn-join" onclick="joinRoom()">🚪 Join Room</button>
+  </div>
+</div>
+
+<!-- ════════ ROOM LOBBY ════════ -->
+<div id="roomLobby">
+  <div class="inner">
+    <div class="card" style="max-width:360px;width:100%">
+      <div class="room-code" id="displayCode">----</div>
+      <div class="room-label">📋 Share this code with friends</div>
+      <ul class="player-list" id="playerList"></ul>
+    </div>
+    <div class="card" style="max-width:360px;width:100%">
+      <div style="font-size:.8em;color:#888;margin-bottom:8px">Game Mode</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+        <div>
+          <div style="font-size:.75em;color:#888;margin-bottom:5px">Mode</div>
+          <select id="modeSelect" style="width:100%;padding:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);border-radius:8px;color:#fff;font-size:.85em">
+            <option value="normal">🎭 Normal</option>
+            <option value="infection">🦠 Increasing Oni</option>
+            <option value="double">🔄 Double</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:.75em;color:#888;margin-bottom:5px">Map</div>
+          <select id="mapSelect" style="width:100%;padding:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);border-radius:8px;color:#fff;font-size:.85em">
+            <option value="hotel">🏨 Penguin Hotel</option>
+            <option value="sugarland">🍭 Sugarland</option>
+            <option value="rooftop">🏙️ City Rooftop</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn-start" id="startBtn" style="display:none" onclick="startGame()">▶️ Start Game</button>
+      <div id="waitMsg" style="text-align:center;color:#666;font-size:.85em">Waiting for host to start…</div>
+      <button class="btn-back" onclick="location.reload()">← Leave Room</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ GAME ════════ -->
+<div id="gameContainer">
+
+  <!-- Seeker Prep Blackout — seeker cannot see map during prep -->
+  <div id="seekerPrepOverlay">
+    <div class="sov-dots" id="sovDots"></div>
+    <div class="sov-eyes">🙈</div>
+    <div class="sov-title">Eyes Closed!</div>
+    <div class="sov-sub" id="spoSub">Hiders are painting themselves…</div>
+    <div class="sov-timer" id="spoTimer">30</div>
+    <div class="sov-hint">Hunt begins automatically</div>
+  </div>
+
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div id="hudTop">
+      <span id="phaseLabel">LOBBY</span>
+      <span id="timerDisplay"></span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="myRoleBadge"></span>
+        <button onclick="toggleMute()" id="muteBtn" style="background:rgba(255,255,255,0.12);border:none;border-radius:50%;width:32px;height:32px;font-size:1em;cursor:pointer;pointer-events:all;color:#fff" title="Toggle sound">🔊</button>
+      </div>
+    </div>
+    <div id="hiderIcons"></div>
+    <!-- Camo score bar (hiders only) -->
+    <div id="camoBar" style="display:none;padding:4px 14px 8px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:.72em;color:#aaa;white-space:nowrap">🎨 Camo</span>
+        <div style="flex:1;background:rgba(255,255,255,0.12);border-radius:8px;height:7px;overflow:hidden">
+          <div id="camoFill" style="height:100%;width:0%;border-radius:8px;transition:width .6s ease;background:linear-gradient(90deg,#ff4444 0%,#ffeb3b 50%,#69f0ae 100%)"></div>
+        </div>
+        <span id="camoNum" style="font-size:.78em;font-weight:700;min-width:34px;text-align:right;color:#69f0ae">0%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile joystick -->
+  <div id="joystickZone"></div>
+
+  <!-- Emote row (shown during game) -->
+  <div id="emoteRow" style="position:fixed;bottom:110px;left:50%;transform:translateX(-50%);display:none;gap:10px;z-index:110;pointer-events:all">
+    <button onclick="triggerEmote('wave')"      style="width:46px;height:46px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);font-size:1.4em;cursor:pointer;pointer-events:all">👋</button>
+    <button onclick="triggerEmote('celebrate')" style="width:46px;height:46px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);font-size:1.4em;cursor:pointer;pointer-events:all">🎉</button>
+    <button onclick="triggerEmote('sleep')"     style="width:46px;height:46px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);font-size:1.4em;cursor:pointer;pointer-events:all">😴</button>
+    <button onclick="triggerEmote('taunt')"     style="width:46px;height:46px;border-radius:50%;border:none;background:rgba(0,0,0,0.5);font-size:1.4em;cursor:pointer;pointer-events:all">😝</button>
+  </div>
+
+  <!-- Action buttons -->
+  <div id="actionBtns">
+    <button class="abtn" id="poseBtn"  title="Pose"  onclick="cyclePose()">🕴️</button>
+    <button class="abtn" id="paintBtn" title="Paint" onclick="togglePaint()">🎨</button>
+    <button class="abtn" id="tagBtn"   title="Tag"   onclick="tryTag()">👆</button>
+    <button class="abtn" id="emoteWheelBtn" title="Hold &amp; drag to emote" style="background:rgba(255,235,100,0.8);color:#333;touch-action:none">😊</button>
+  </div>
+
+  <!-- Paint panel -->
+  <div id="paintPanel">
+    <div class="pt">🎨 Paint Your Body</div>
+    <div class="swatches" id="swatches"></div>
+    <input type="color" id="cpick" value="#00bcd4" />
+    <div class="eyedrop-hint">Tap any surface to sample color</div>
+  </div>
+
+  <!-- Prep overlay -->
+  <div class="overlay" id="prepOverlay">
+    <div style="font-size:3em">🎨</div>
+    <h2>Prep Phase!</h2>
+    <p id="prepMsg">Paint yourself and find a hiding spot!</p>
+    <div class="big-num" id="prepNum">30</div>
+    <p style="color:#555;font-size:.78em;margin-top:8px">Hunt begins automatically</p>
+  </div>
+
+  <!-- Result overlay -->
+  <div class="overlay" id="resultOverlay">
+    <div id="resEmoji" style="font-size:4em">🎉</div>
+    <h2 id="resTitle">Game Over!</h2>
+    <div id="resMsg" style="width:100%;max-width:420px;text-align:left"></div>
+    <button class="btn-start" onclick="goBackLobby()" style="max-width:200px;margin-top:14px">🔄 Back to Lobby</button>
+  </div>
+</div>
+
+
+<!-- Emote Wheel (radial, hold-and-drag on mobile) -->
+<div id="emoteWheel" aria-hidden="true">
+  <div class="ew-bg"></div>
+  <div class="ew-center"></div>
+  <div class="ew-item" id="ewi-wave"      style="--tx:-56.6px;--ty:-56.6px">👋<span>wave</span></div>
+  <div class="ew-item" id="ewi-celebrate" style="--tx:0px;--ty:-80px">🎉<span>celebrate</span></div>
+  <div class="ew-item" id="ewi-sleep"     style="--tx:56.6px;--ty:-56.6px">😴<span>sleep</span></div>
+  <div class="ew-item" id="ewi-taunt"     style="--tx:-80px;--ty:0px">😝<span>taunt</span></div>
+  <div class="ew-hint">hold &amp; drag</div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://unpkg.com/three@0.134.0/build/three.min.js"></script>
+<script src="https://unpkg.com/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
