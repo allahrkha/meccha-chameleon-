@@ -355,6 +355,31 @@ io.on('connection', socket => {
     io.to(code).emit('returnedToLobby',rooms[code]);
   });
 
+
+  // ── Jump (broadcast to room) ──────────────────────────────────
+  socket.on('playerJump', () => {
+    const code = socket.data.roomCode;
+    if (!rooms[code]) return;
+    socket.to(code).emit('playerJump', { id: socket.id });
+  });
+
+  // ── Surface paint sync ────────────────────────────────────────
+  socket.on('surfacePaint', (data) => {
+    const code = socket.data.roomCode;
+    if (!rooms[code]) return;
+    socket.to(code).emit('surfacePaint', data);
+  });
+  socket.on('surfacePaintUndo', () => {
+    const code = socket.data.roomCode;
+    if (!rooms[code]) return;
+    socket.to(code).emit('surfacePaintUndo');
+  });
+  socket.on('surfacePaintClear', () => {
+    const code = socket.data.roomCode;
+    if (!rooms[code]) return;
+    socket.to(code).emit('surfacePaintClear');
+  });
+
   // ── Disconnect ───────────────────────────────────
   socket.on('disconnect', () => {
     const code=socket.data.roomCode;

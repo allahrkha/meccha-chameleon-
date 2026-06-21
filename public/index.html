@@ -388,6 +388,41 @@
     @keyframes dfHit  { 0%{opacity:1;background:rgba(105,240,174,.4)} 100%{opacity:0} }
     @keyframes dfMiss { 0%{opacity:1;background:rgba(255,60,60,.32)}  100%{opacity:0} }
 
+
+    /* ── CUSTOM JOYSTICK ─────────────────────────────── */
+    #joyBase {
+      position:fixed;
+      bottom:max(28px, env(safe-area-inset-bottom, 28px));
+      left:max(20px, env(safe-area-inset-left, 20px));
+      width:130px; height:130px; border-radius:50%;
+      background:rgba(255,255,255,0.07);
+      border:3px solid rgba(0,229,255,0.4);
+      box-shadow:0 0 20px rgba(0,229,255,0.12), inset 0 0 30px rgba(0,0,0,0.25);
+      z-index:200; pointer-events:all;
+      touch-action:none; user-select:none;
+      display:none; /* shown by JS when game starts */
+    }
+    #joyHandle {
+      position:absolute; left:50%; top:50%;
+      transform:translate(-50%,-50%);
+      width:50px; height:50px; border-radius:50%;
+      background:radial-gradient(circle at 38% 35%, rgba(255,255,255,0.95), rgba(0,229,255,0.75));
+      border:2px solid rgba(255,255,255,0.85);
+      box-shadow:0 3px 10px rgba(0,0,0,0.4);
+      pointer-events:none;
+      transition:transform 0.04s ease-out;
+    }
+    /* Subtle direction tick marks on base */
+    .joy-ring {
+      position:absolute; inset:0; border-radius:50%;
+      background:
+        radial-gradient(1.5px 10px at 50% 8%, rgba(255,255,255,.2), transparent),
+        radial-gradient(1.5px 10px at 50% 92%, rgba(255,255,255,.2), transparent),
+        radial-gradient(10px 1.5px at 8% 50%, rgba(255,255,255,.2), transparent),
+        radial-gradient(10px 1.5px at 92% 50%, rgba(255,255,255,.2), transparent);
+      pointer-events:none;
+    }
+
     /* ── EMOTE WHEEL ──────────────────────────── */
     #emoteWheel {
       position:fixed; z-index:500; width:200px; height:200px;
@@ -456,6 +491,102 @@
       background:rgba(255,255,255,.55); margin:2px auto -3px;
     }
 
+
+    /* ══════════════════════════════════════════════════════════
+       LOBBY — base structure
+       ══════════════════════════════════════════════════════════ */
+    .lobby-left {
+      display:flex; flex-direction:column; align-items:center;
+      text-align:center;
+    }
+    .lobby-right {
+      display:flex; align-items:center; justify-content:center;
+      width:100%;
+    }
+
+    /* Customization panel */
+    .cust-panel  { background:rgba(255,255,255,.05); border-radius:10px; padding:11px; margin-bottom:10px; }
+    .cust-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:7px; font-size:.78em; color:#aaa; }
+    .cust-body   { display:flex; flex-direction:column; gap:7px; }
+    .cust-col    { display:flex; flex-direction:column; gap:4px; }
+    .cust-label  { font-size:.7em; color:#666; }
+    #skinPicker  { display:flex; gap:5px; flex-wrap:wrap; }
+    #hatPicker   { display:flex; gap:4px; flex-wrap:wrap; }
+
+    /* ── Room lobby base ── */
+    #roomLobby        { display:none; }
+    #roomLobby .inner { display:flex; flex-direction:column; align-items:center;
+                        justify-content:center; height:100dvh; padding:18px 20px; gap:12px; }
+    .rl-left, .rl-right { width:100%; max-width:360px; }
+    .rl-settings { display:flex; flex-direction:column; gap:8px; }
+    .rl-row      { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .rl-field    { display:flex; flex-direction:column; gap:4px; }
+    .rl-label    { font-size:.72em; color:#666; }
+    .rl-select   { width:100%; padding:8px; background:rgba(255,255,255,.08);
+                   border:1px solid rgba(255,255,255,.18); border-radius:8px;
+                   color:#fff; font-size:.82em; }
+
+    /* ══════════════════════════════════════════════════════════
+       LANDSCAPE MOBILE  (phone held sideways)
+       Trigger: landscape + short screen (< 560 px tall)
+       ══════════════════════════════════════════════════════════ */
+    @media (orientation:landscape) and (max-height:560px) {
+
+      /* ─ Main Lobby ─ */
+      #lobby {
+        flex-direction: row !important;
+        align-items: center;
+        justify-content: center;
+        padding: 10px max(14px, env(safe-area-inset-left,14px))
+                 10px max(14px, env(safe-area-inset-right,14px));
+        gap: 18px;
+      }
+      .lobby-left  { width:30%; flex-shrink:0; align-items:flex-start; text-align:left; }
+      .lobby-right { flex:1; max-width:480px; align-items:stretch; }
+
+      /* Smaller logo in landscape */
+      .logo    { font-size:clamp(1.3rem,3.8vw,1.8rem) !important; margin-bottom:3px; line-height:1.15; }
+      .tagline { font-size:.68em; margin-bottom:0; }
+
+      /* Card fits in screen height */
+      #lobby .card {
+        padding:10px 12px; margin-bottom:0; max-width:none;
+        max-height:calc(100dvh - 20px); overflow-y:auto;
+      }
+      #lobby input  { padding:8px 11px; margin-bottom:5px; font-size:.86em; }
+      #lobby button { padding:9px 10px; margin-bottom:4px; font-size:.86em; }
+      .or { margin:3px 0; font-size:.74em; }
+
+      /* Customization: skin + hat side by side */
+      .cust-panel  { padding:8px; margin-bottom:7px; }
+      .cust-body   { flex-direction:row; gap:10px; }
+      .cust-col    { flex:1; min-width:0; }
+      .cust-header { margin-bottom:5px; font-size:.74em; }
+      #skinPicker  { gap:3px; }
+      #hatPicker   { gap:3px; }
+
+      /* ─ Room Lobby ─ */
+      #roomLobby .inner {
+        flex-direction: row;
+        align-items: stretch;
+        padding: 10px max(14px, env(safe-area-inset-left,14px));
+        gap: 10px;
+        height: 100dvh;
+      }
+      .rl-left, .rl-right {
+        flex:1; max-width:50%; margin:0;
+        overflow-y:auto; max-height:calc(100dvh - 20px);
+      }
+      .room-code  { font-size:clamp(1.7rem,5.5vw,2.2rem); letter-spacing:6px; margin-bottom:2px; }
+      .room-label { font-size:.68em; margin-bottom:6px; }
+      .player-item{ padding:5px 0; font-size:.85em; }
+
+      /* Compact selects */
+      .rl-select     { padding:6px 8px; font-size:.78em; }
+      .rl-settings   { gap:6px; }
+      .rl-row        { gap:6px; }
+      #startBtn      { padding:10px; font-size:.88em; margin-top:6px; }
+    }
   </style>
 </head>
 <body>
@@ -492,63 +623,100 @@
 
 <!-- ════════ LOBBY ════════ -->
 <div id="lobby">
-  <div class="logo">🦎 MECCHA<br>CHAMELEON</div>
-  <div class="tagline">Paint yourself. Blend in. Survive.</div>
 
-  <div class="card">
-    <input id="playerName" placeholder="Your name" maxlength="16" />
+  <!-- LEFT: branding (top in portrait, left column in landscape) -->
+  <div class="lobby-left">
+    <div class="logo">&#x1F98E; MECCHA<br>CHAMELEON</div>
+    <div class="tagline">Paint yourself. Blend in. Survive.</div>
+  </div>
 
-    <!-- Character Customization -->
-    <div style="background:rgba(255,255,255,0.05);border-radius:10px;padding:12px;margin-bottom:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <span style="font-size:.78em;color:#aaa">🎨 Customize</span>
-        <div id="charPreview" style="min-width:30px;text-align:center"></div>
+  <!-- RIGHT: form (below in portrait, right column in landscape) -->
+  <div class="lobby-right">
+    <div class="card">
+      <input id="playerName" placeholder="Your name" maxlength="16" />
+
+      <!-- Customisation (skin + hat go side-by-side in landscape) -->
+      <div class="cust-panel">
+        <div class="cust-header">
+          <span>&#x1F3A8; Customize</span>
+          <div id="charPreview"></div>
+        </div>
+        <div class="cust-body">
+          <div class="cust-col">
+            <div class="cust-label">Skin</div>
+            <div id="skinPicker"></div>
+          </div>
+          <div class="cust-col">
+            <div class="cust-label">Hat</div>
+            <div id="hatPicker"></div>
+          </div>
+        </div>
       </div>
-      <div style="font-size:.72em;color:#666;margin-bottom:5px">Skin</div>
-      <div id="skinPicker" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
-      <div style="font-size:.72em;color:#666;margin-bottom:5px">Hat</div>
-      <div id="hatPicker" style="display:flex;gap:5px;flex-wrap:wrap"></div>
-    </div>
 
-    <button class="btn-create" onclick="createRoom()">🏠 Create Room</button>
-    <div class="or">── or ──</div>
-    <input id="joinCode" placeholder="Room code" maxlength="6" />
-    <button class="btn-join" onclick="joinRoom()">🚪 Join Room</button>
+      <button class="btn-create" onclick="createRoom()">&#x1F3E0; Create Room</button>
+      <div class="or">&#x2500;&#x2500; or &#x2500;&#x2500;</div>
+      <input id="joinCode" placeholder="Room code" maxlength="6" />
+      <button class="btn-join" onclick="joinRoom()">&#x1F6AA; Join Room</button>
+    </div>
   </div>
 </div>
 
 <!-- ════════ ROOM LOBBY ════════ -->
 <div id="roomLobby">
   <div class="inner">
-    <div class="card" style="max-width:360px;width:100%">
+
+    <!-- LEFT: room code + players -->
+    <div class="card rl-left">
       <div class="room-code" id="displayCode">----</div>
-      <div class="room-label">📋 Share this code with friends</div>
+      <div class="room-label">&#x1F4CB; Share this code with friends</div>
       <ul class="player-list" id="playerList"></ul>
     </div>
-    <div class="card" style="max-width:360px;width:100%">
-      <div style="font-size:.8em;color:#888;margin-bottom:8px">Game Mode</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
-        <div>
-          <div style="font-size:.75em;color:#888;margin-bottom:5px">Mode</div>
-          <select id="modeSelect" style="width:100%;padding:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);border-radius:8px;color:#fff;font-size:.85em">
-            <option value="normal">🎭 Normal</option>
-            <option value="infection">🦠 Increasing Oni</option>
-            <option value="double">🔄 Double</option>
-          </select>
+
+    <!-- RIGHT: settings + start -->
+    <div class="card rl-right">
+      <div class="rl-settings">
+        <div class="rl-row">
+          <div class="rl-field">
+            <div class="rl-label">Mode</div>
+            <select id="modeSelect" class="rl-select">
+              <option value="normal">&#x1F3AD; Normal</option>
+              <option value="infection">&#x1F9A0; Increasing Oni</option>
+              <option value="double">&#x1F504; Double</option>
+            </select>
+          </div>
+          <div class="rl-field">
+            <div class="rl-label">Map</div>
+            <select id="mapSelect" class="rl-select">
+              <option value="hotel">&#x1F3E8; Penguin Hotel</option>
+              <option value="sugarland">&#x1F36D; Sugarland</option>
+              <option value="rooftop">&#x1F3D9;&#xFE0F; City Rooftop</option>
+            </select>
+          </div>
         </div>
-        <div>
-          <div style="font-size:.75em;color:#888;margin-bottom:5px">Map</div>
-          <select id="mapSelect" style="width:100%;padding:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.18);border-radius:8px;color:#fff;font-size:.85em">
-            <option value="hotel">🏨 Penguin Hotel</option>
-            <option value="sugarland">🍭 Sugarland</option>
-            <option value="rooftop">🏙️ City Rooftop</option>
-          </select>
+        <div class="rl-row">
+          <div class="rl-field">
+            <div class="rl-label">Rounds</div>
+            <select id="roundsSelect" class="rl-select">
+              <option value="1">1 Round</option>
+              <option value="3">Best of 3</option>
+              <option value="5">Best of 5</option>
+            </select>
+          </div>
+          <div class="rl-field" style="justify-content:flex-end">
+            <button class="btn-back" onclick="location.reload()" style="margin:0">
+              &#x2190; Leave
+            </button>
+          </div>
         </div>
       </div>
-      <button class="btn-start" id="startBtn" style="display:none" onclick="startGame()">▶️ Start Game</button>
-      <div id="waitMsg" style="text-align:center;color:#666;font-size:.85em">Waiting for host to start…</div>
-      <button class="btn-back" onclick="location.reload()">← Leave Room</button>
+      <button class="btn-start" id="startBtn" style="display:none" onclick="startGame()">
+        &#x25B6;&#xFE0F; Start Game
+      </button>
+      <div id="waitMsg" style="text-align:center;color:#666;font-size:.82em;padding:8px 0">
+        Waiting for host to start&#x2026;
+      </div>
     </div>
+
   </div>
 </div>
 
@@ -592,7 +760,11 @@
   </div>
 
   <!-- Mobile joystick -->
-  <div id="joystickZone"></div>
+  <!-- Custom always-visible joystick -->
+  <div id="joyBase">
+    <div id="joyHandle"></div>
+    <div class="joy-ring"></div>
+  </div>
 
   <!-- Emote row (shown during game) -->
   <div id="emoteRow" style="position:fixed;bottom:110px;left:50%;transform:translateX(-50%);display:none;gap:10px;z-index:110;pointer-events:all">
@@ -604,6 +776,7 @@
 
   <!-- Action buttons -->
   <div id="actionBtns">
+    <button class="abtn" id="jumpBtn"  title="Jump"  onclick="jump()" style="background:linear-gradient(135deg,#69f0ae,#00bcd4);color:#fff;display:none">🦘</button>
     <button class="abtn" id="poseBtn"  title="Pose"  onclick="cyclePose()">🕴️</button>
     <button class="abtn" id="paintBtn" title="Paint" onclick="togglePaint()">🎨</button>
     <button class="abtn" id="tagBtn"   title="Tag"   onclick="tryTag()">👆</button>

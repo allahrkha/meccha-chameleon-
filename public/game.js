@@ -497,6 +497,10 @@ function enterGame(roomData){
   buildPalette();
   document.getElementById('gameCanvas').addEventListener('click',onCanvasClick);
   if(!animating){animating=true;requestAnimationFrame(loop);}
+  // Show in-game controls
+  ['joyBase','jumpBtn'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='flex';});
+  requestWakeLock();
+  if(IS_MOBILE&&!IS_IOS) enterFullscreen();
   // Auto fullscreen + wake lock on game start (mobile)
   if(IS_MOBILE && !IS_IOS){ enterFullscreen(); }
   requestWakeLock();
@@ -514,10 +518,14 @@ function initThree(){
   renderer.setSize(innerWidth,innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));
   renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
-  window.addEventListener('resize',()=>{
-    camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  function onResize(){
+    camera.aspect=innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
     renderer.setSize(innerWidth,innerHeight);
-  });
+  }
+  window.addEventListener('resize', onResize);
+  document.addEventListener('fullscreenchange',       ()=>setTimeout(onResize,200));
+  document.addEventListener('webkitfullscreenchange', ()=>setTimeout(onResize,200));
   document.addEventListener('keydown',e=>{
     keys[e.code]=true;
     // E → toggle desktop emote panel
@@ -1347,6 +1355,32 @@ function updateCamera(){
   camera.lookAt(px,1.0,pz);
 }
 
+
+// ═══════════════════════════════════════════════════
+//  🦘 JUMP
+// ═══════════════════════════════════════════════════
+const GRAVITY=-22, JUMP_FORCE=9;
+let myVelocityY=0, myGrounded=true;
+
+function jump(){
+  if(!myMesh||!myGrounded||myRole==='ghost')return;
+  myGrounded=false; myVelocityY=JUMP_FORCE;
+  myMesh.scale.set(0.82,1.28,0.82);
+  socket.emit('playerJump');
+  if(audioCtx)tone(440,.08,'sine',.15);
+}
+function applyJumpPhysics(dt){
+  if(!myMesh||myGrounded)return;
+  myVelocityY+=(-22)*dt;
+  const ny=Math.max(0,myMesh.position.y+myVelocityY*dt);
+  myMesh.position.y=ny;
+  if(ny<=0){
+    myGrounded=true;myVelocityY=0;
+    myMesh.scale.set(1.18,0.78,1.18);
+    setTimeout(()=>{if(myMesh)myMesh.scale.set(1,1,1);},180);
+  }
+}
+
 function loop(){
   if(!animating) return;
   requestAnimationFrame(loop);
@@ -1472,10 +1506,29 @@ function updateCamoUI(score, breakdown){
 // ═══════════════════════════════════════════════════
 
 function initJoystick(){
-  if(joyInitd||!window.nipplejs) return;joyInitd=true;
-  const jm=nipplejs.create({zone:document.getElementById('joystickZone'),mode:'static',position:{left:'50%',top:'50%'},color:'rgba(255,255,255,0.35)',size:110});
-  jm.on('move',(_,d)=>{const a=d.angle.radian,f=Math.min(d.force,1);joystick.x=Math.cos(a)*f;joystick.y=Math.sin(a)*f;});
-  jm.on('end',()=>{joystick.x=0;joystick.y=0;});
+  if(joyInitd)return; joyInitd=true;
+  const base   = document.getElementById('joyBase');
+  const handle = document.getElementById('joyHandle');
+  if(!base||!handle)return;
+  const JOY_MAX=42; let touchId=-1;
+  function getC(){const r=base.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};}
+  function move(cx,cy){
+    const c=getC(),dx=cx-c.x,dy=cy-c.y;
+    const dist=Math.sqrt(dx*dx+dy*dy),cl=Math.min(dist,JOY_MAX),a=Math.atan2(dy,dx);
+    handle.style.transform=`translate(calc(-50% + ${Math.cos(a)*cl}px),calc(-50% + ${Math.sin(a)*cl}px))`;
+    const f=Math.min(dist/JOY_MAX,1);
+    joystick.x=Math.cos(a)*f; joystick.y=-Math.sin(a)*f;
+  }
+  function reset(){handle.style.transform='translate(-50%,-50%)';joystick.x=0;joystick.y=0;}
+  base.addEventListener('touchstart',e=>{e.preventDefault();const t=e.changedTouches[0];touchId=t.identifier;move(t.clientX,t.clientY);},{passive:false});
+  base.addEventListener('touchmove', e=>{e.preventDefault();const t=Array.from(e.changedTouches).find(t=>t.identifier===touchId);if(t)move(t.clientX,t.clientY);},{passive:false});
+  ['touchend','touchcancel'].forEach(ev=>base.addEventListener(ev,e=>{
+    if(Array.from(e.changedTouches).some(t=>t.identifier===touchId)){touchId=-1;reset();}
+  },{passive:false}));
+  let md=false;
+  base.addEventListener('mousedown',e=>{md=true;move(e.clientX,e.clientY);});
+  document.addEventListener('mousemove',e=>{if(md)move(e.clientX,e.clientY);});
+  document.addEventListener('mouseup',()=>{if(md){md=false;reset();}});
 }
 function initCameraControls(){
   const cv = document.getElementById('gameCanvas');
@@ -1492,16 +1545,22 @@ function initCameraControls(){
 
   // Is this touch landing inside the joystick zone?
   function onJoystick(touch){
-    const el=document.getElementById('joystickZone');
+    const el=document.getElementById('joyBase')||document.getElementById('joystickZone');
     if(!el) return false;
     const r=el.getBoundingClientRect();
-    return touch.clientX>=r.left && touch.clientX<=r.right &&
-           touch.clientY>=r.top  && touch.clientY<=r.bottom;
+    return touch.clientX>=r.left-20 && touch.clientX<=r.right+20 &&
+           touch.clientY>=r.top-20  && touch.clientY<=r.bottom+20;
   }
   // Is this touch on any UI button?
   function onButton(touch){
-    const el=document.elementFromPoint(touch.clientX,touch.clientY);
-    return el && (el.tagName==='BUTTON'||el.closest('#actionBtns')||el.closest('#emoteRow')||el.closest('#paintPanel')||el.closest('.ew-item'));
+    try{
+      const el=document.elementFromPoint(touch.clientX,touch.clientY);
+      if(!el) return false;
+      return el.tagName==='BUTTON'||
+             !!el.closest('#actionBtns')||!!el.closest('#emoteRow')||
+             !!el.closest('#paintPanel')||!!el.closest('.ew-item')||
+             !!el.closest('#joyBase');
+    }catch(e){return false;}
   }
 
   cv.addEventListener('touchstart', e=>{
@@ -2044,8 +2103,15 @@ socket.on('returnedToLobby',room=>{
     setCharColor(p.id,p.bodyColor);applyPose(p.id,'stand');
   });
   refreshRoleUI();refreshPlayerList(room.players);toast('Back to lobby! 🏨');
+  ['joyBase','jumpBtn'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
 });
 
+
+socket.on('playerJump',({id})=>{
+  const m=playerMeshes[id];if(!m)return;
+  m.scale.set(0.82,1.25,0.82);
+  setTimeout(()=>{if(m)m.scale.set(1,1,1);},400);
+});
 // ── Init customization UI on page load ─────────────────────────
 document.addEventListener('DOMContentLoaded',()=>{ initCustomizationUI(); initIntro(); });
 if(document.readyState==='complete'||document.readyState==='interactive'){ initCustomizationUI(); initIntro(); }
